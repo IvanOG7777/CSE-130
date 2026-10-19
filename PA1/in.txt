@@ -1,0 +1,3 @@
+Hello this is my text from in.txt.
+We will try to use this file in my
+memory.c program from CSE130.
