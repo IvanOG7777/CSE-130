@@ -3,7 +3,7 @@
  *
  * This file contains the main function for the HTTP server.
  *
- * @author [Put your name here]
+ * @author Elder Ivan Argueta
  */
 
 #include "listener_socket.h"
@@ -24,68 +24,79 @@
 
 #define BUFFER_SIZE 4096
 
-/** @brief Handles a connection from a client.
- *
- *  @param connfd The file descriptor for the connection.
- *
- *  @return void
- */
-void handle_connection(int connfd) {
-    char buffer[BUFFER_SIZE];
+// Items that are sent in a request from client
+struct Request_t {
     char method[9];
     char uri[65];
     char version[9];
+    size_t content_length;
+    int has_content_length;
+    int header_end;
+    int bytes_read;
+};
 
-    ssize_t read_res = read(connfd, buffer, sizeof(buffer));
+void send_response(int connfd, int code) {
+    const char *status_phrase;
+    const char *message_body;
+    switch (code) {
+    case 200:
+        message_body = "OK\n";
+        status_phrase = "OK";
+        break;
+    case 201:
+        message_body = "Created\n";
+        status_phrase = "Created";
+        break;
+    case 400:
+        message_body = "Bad Request\n";
+        status_phrase = "Bad Request";
+        break;
+    case 403:
+        message_body = "Forbidden\n";
+        status_phrase = "Forbidden";
+        break;
+    case 404:
+        message_body = "Not Found\n";
+        status_phrase = "Not Found";
+        break;
+    case 500:
+        message_body = "Internal Server Error\n";
+        status_phrase = "Internal Server Error";
+        break;
+    case 501:
+        message_body = "Not Implemented\n";
+        status_phrase = "Not Implemented";
+        break;
+    case 505:
+        message_body = "Version Not Supported\n";
+        status_phrase = "Version Not Supported";
+        break;
+    default:
+        code = 500;
+        message_body = "Internal Server Error\n";
+        status_phrase = "Internal Server Error";
+        break;
 
-    if (read_res < 1) {
-        close(connfd);
-        return;
     }
 
-    int buffer_index = 0;
-    int method_index = 0;
-    int uri_index = 0;
-    int version_index = 0;
+    char response[256];
 
-    int continue_reading_method = 1;
-    while (continue_reading_method) {
-        while (buffer_index < read_res) {
-            if (buffer[buffer_index] == '/') {
-                continue_reading_method = 0;
-                buffer_index++;
-                break;
-            }
+    int length = snprintf(response, sizeof(response), "HTTP/1.1 %d %s\r\nContent-Length: %zu\r\n\r\n%s", code, status_phrase, strlen(message_body), message_body);
 
-            if (method_index >= 9) {
-                fprintf(stderr, "To many for method\n");
-                close(connfd);
-                return;
-            }
+    if (length < 0) return;
 
-            method[method_index] = buffer[buffer_index];
-            method_index++;
-            buffer_index++;
-        }
+    if ((size_t)length >= sizeof(response)) return;
 
-        if (continue_reading_method == 0) {
-            break;
-        }
-    }
+    write_n_bytes(connfd, response, length);
+}
 
-    method[method_index] = '\n';
+void handle_connection(int connfd) {
+    char buffer[BUFFER_SIZE];
 
     close(connfd);
     return;
 }
 
-/** @brief Main function for the HTTP server.
- *
- *  @param argc The number of arguments.
- *  @param argv The arguments.
- *
- *  @return EXIT_SUCCESS if successful, EXIT_FAILURE otherwise.
- */
 int main(int argc, char **argv) {
     if (argc != 2) {
         warnx("wrong arguments: %s port_num", argv[0]);
