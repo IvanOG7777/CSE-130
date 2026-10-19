@@ -31,9 +31,49 @@
  *  @return void
  */
 void handle_connection(int connfd) {
-    /* Your code here */
+    char buffer[BUFFER_SIZE];
+    char method[9];
+    char uri[65];
+    char version[9];
 
-    fprintf(stdout,"Client connected\n");
+    ssize_t read_res = read(connfd, buffer, sizeof(buffer));
+
+    if (read_res < 1) {
+        close(connfd);
+        return;
+    }
+
+    int buffer_index = 0;
+    int method_index = 0;
+    int uri_index = 0;
+    int version_index = 0;
+
+    int continue_reading_method = 1;
+    while (continue_reading_method) {
+        while (buffer_index < read_res) {
+            if (buffer[buffer_index] == '/') {
+                continue_reading_method = 0;
+                buffer_index++;
+                break;
+            }
+
+            if (method_index >= 9) {
+                fprintf(stderr, "To many for method\n");
+                close(connfd);
+                return;
+            }
+
+            method[method_index] = buffer[buffer_index];
+            method_index++;
+            buffer_index++;
+        }
+
+        if (continue_reading_method == 0) {
+            break;
+        }
+    }
+
+    method[method_index] = '\n';
 
     close(connfd);
     return;
@@ -83,8 +123,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Invalid Port\n");
         return EXIT_FAILURE;
     }
-
-    printf("Port is: %zu\n", port);
 
     /* Add error checking for the port number */
 
