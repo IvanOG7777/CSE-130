@@ -25,7 +25,7 @@
 #define BUFFER_SIZE 4096
 
 // Items that are sent in a request from client
-struct Request_t {
+typedef struct Request_t {
     char method[9];
     char uri[65];
     char version[9];
@@ -33,7 +33,7 @@ struct Request_t {
     int has_content_length;
     int header_end;
     int bytes_read;
-};
+} Request;
 
 void send_response(int connfd, int code) {
     const char *status_phrase;
@@ -91,7 +91,49 @@ void send_response(int connfd, int code) {
 }
 
 void handle_connection(int connfd) {
+    Request request;
+    request.bytes_read = 0;
+    request.content_length = 0;
+    request.has_content_length = 0;
+    request.header_end = 0;
+
+    int continue_reading = 1;
     char buffer[BUFFER_SIZE];
+    int read_res = 0;
+
+    while (continue_reading) {
+
+        if (request.bytes_read == BUFFER_SIZE) {
+            continue_reading = 0;
+            send_response(connfd, 400);
+            continue;
+        }
+
+        // connfd is where to read from, buffer + bytes_read is where to place bytes at,
+        read_res = read(connfd, buffer + request.bytes_read, sizeof(buffer) - request.bytes_read); // read only remaining bytes to buffer + bytes_read from connfd
+
+        if (read_res == -1) {
+            printf("Bad read in loop\n");
+            break;
+        }
+
+        if (read_res == 0) {
+            printf("EOF in loop\n");
+            break;
+        }
+
+        request.bytes_read += read_res; // add to the amount of bytes read to the buffer
+
+        if (request.bytes_read >= 4) {
+            for (int i = 0; i <= request.bytes_read - 4; i++) {
+                if (buffer[i] == '\r' && buffer[i+1] == '\n' && buffer[i+2] == '\r' && buffer[i+3] == '\n') {
+                    request.header_end = i + 4;
+                    continue_reading = 0;
+                    break;
+                }
+            }
+        }
+    }
 
     close(connfd);
     return;
