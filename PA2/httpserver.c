@@ -41,53 +41,53 @@ void send_response(int connfd, int code) {
     const char *status_phrase;
     const char *message_body;
     switch (code) {
-    case 200:
-        message_body = "OK\n";
-        status_phrase = "OK";
-        break;
-    case 201:
-        message_body = "Created\n";
-        status_phrase = "Created";
-        break;
-    case 400:
-        message_body = "Bad Request\n";
-        status_phrase = "Bad Request";
-        break;
-    case 403:
-        message_body = "Forbidden\n";
-        status_phrase = "Forbidden";
-        break;
-    case 404:
-        message_body = "Not Found\n";
-        status_phrase = "Not Found";
-        break;
-    case 500:
-        message_body = "Internal Server Error\n";
-        status_phrase = "Internal Server Error";
-        break;
-    case 501:
-        message_body = "Not Implemented\n";
-        status_phrase = "Not Implemented";
-        break;
-    case 505:
-        message_body = "Version Not Supported\n";
-        status_phrase = "Version Not Supported";
-        break;
-    default:
-        code = 500;
-        message_body = "Internal Server Error\n";
-        status_phrase = "Internal Server Error";
-        break;
-
+        case 200:
+            message_body = "OK\n";
+            status_phrase = "OK";
+            break;
+        case 201:
+            message_body = "Created\n";
+            status_phrase = "Created";
+            break;
+        case 400:
+            message_body = "Bad Request\n";
+            status_phrase = "Bad Request";
+            break;
+        case 403:
+            message_body = "Forbidden\n";
+            status_phrase = "Forbidden";
+            break;
+        case 404:
+            message_body = "Not Found\n";
+            status_phrase = "Not Found";
+            break;
+        case 500:
+            message_body = "Internal Server Error\n";
+            status_phrase = "Internal Server Error";
+            break;
+        case 501:
+            message_body = "Not Implemented\n";
+            status_phrase = "Not Implemented";
+            break;
+        case 505:
+            message_body = "Version Not Supported\n";
+            status_phrase = "Version Not Supported";
+            break;
+        default:
+            code = 500;
+            message_body = "Internal Server Error\n";
+            status_phrase = "Internal Server Error";
+            break;
     }
 
     char response[256];
 
-    int length = snprintf(response, sizeof(response), "HTTP/1.1 %d %s\r\nContent-Length: %zu\r\n\r\n%s", code, status_phrase, strlen(message_body), message_body);
+    int length = snprintf(response, sizeof(response), "HTTP/1.1 %d %s\r\nContent-Length: %zu\r\n\r\n%s", code,
+                          status_phrase, strlen(message_body), message_body);
 
     if (length < 0) return;
 
-    if ((size_t)length >= sizeof(response)) return;
+    if ((size_t) length >= sizeof(response)) return;
 
     write_n_bytes(connfd, response, length);
 }
@@ -100,15 +100,22 @@ void handle_connection(int connfd) {
     request.header_end = 0;
 
     int continue_reading = 1;
+
     int valid_buffer = 0;
     int valid_method = 0;
+    int valid_uri = 0;
+    int valid_version = 0;
+
     int uri_start = 0;
-    int found_header = 0;
+    int uri_index = 0;
+
+    int version_start = 0;
+    int version_index = 0;
+
     char buffer[BUFFER_SIZE];
     int read_res = 0;
 
     while (continue_reading) {
-
         if (request.bytes_read >= BUFFER_SIZE) {
             continue_reading = 0;
             send_response(connfd, 400);
@@ -116,10 +123,13 @@ void handle_connection(int connfd) {
         }
 
         // connfd is where to read from, buffer + bytes_read is where to place bytes at,
-        read_res = read(connfd, buffer + request.bytes_read, sizeof(buffer) - request.bytes_read); // read only remaining bytes to buffer + bytes_read from connfd
+        read_res = read(connfd, buffer + request.bytes_read, sizeof(buffer) - request.bytes_read);
+        // read only remaining bytes to buffer + bytes_read from connfd
 
         if (read_res == -1) {
-            printf("Bad read in loop\n");
+            if (errno == EINTR) {
+                continue;
+            }
             send_response(connfd, 500);
             break;
         }
@@ -134,23 +144,24 @@ void handle_connection(int connfd) {
 
         if (request.bytes_read >= 4) {
             for (int i = 0; i <= request.bytes_read - 4; i++) {
-                if (buffer[i] == '\r' && buffer[i+1] == '\n' && buffer[i+2] == '\r' && buffer[i+3] == '\n') {
+                if (buffer[i] == '\r' && buffer[i + 1] == '\n' && buffer[i + 2] == '\r' && buffer[i + 3] == '\n') {
                     request.header_end = i + 4;
+
                     if (request.header_end > 2048) {
                         valid_buffer = 0;
                         continue_reading = 0;
                         send_response(connfd, 400);
                         break;
                     }
+
                     valid_buffer = 1;
                     continue_reading = 0;
-                    found_header = 1;
                     break;
                 }
             }
         }
 
-        if (found_header == 0  && request.bytes_read >= 2048) {
+        if (request.header_end == 0 && request.bytes_read >= 2048) {
             valid_buffer = 0;
             continue_reading = 0;
             send_response(connfd, 400);
@@ -158,16 +169,19 @@ void handle_connection(int connfd) {
         }
     }
 
+    // if we have made a valid header
     if (valid_buffer) {
+        // loop until end of valid header
         for (int i = 0; i < request.header_end; i++) {
-            if (i == 0) {
-                if (buffer[i] == ' ') {
+            if (i == 0) { // if first char is a space
+                if (buffer[i] == ' ') { // send bad request error
                     send_response(connfd, 400);
                     valid_method = 0;
                     break;
                 }
             }
 
+            // check if we've seen a space indicating end of method
             if (buffer[i] == ' ') {
                 request.method[i] = '\0';
                 valid_method = 1;
@@ -175,29 +189,75 @@ void handle_connection(int connfd) {
                 break;
             }
 
+            // if i is greater than method buffer
+            // send 400 error
             if (i == 8) {
                 send_response(connfd, 400);
                 valid_method = 0;
                 break;
             }
 
+            // only accept valid chars
             if ((buffer[i] >= 'A' && buffer[i] <= 'Z') || (buffer[i] >= 'a' && buffer[i] <= 'z')) {
                 request.method[i] = buffer[i];
             } else {
+                // send bad request error
                 send_response(connfd, 400);
-                close(connfd);
-                return;
+                valid_method = 0;
+                break;
             }
         }
     }
 
+    // if we have made a valid method
     if (valid_method) {
-        if (strcmp(request.method, "GET") == 0) {
-            // parse URI here for GET
-        } else if (strcmp(request.method, "PUT") == 0) {
-            // parse URI for PUT
+        if (buffer[uri_start] == '/') { // check if char at uri_start is a /
+            request.uri[uri_index++] = '/';
+            for (int i = uri_start + 1; i < request.header_end; i++) {
+                // check for space char to end uri
+                if (buffer[i] == ' ') {
+                    if (uri_index < 2) {
+                        send_response(connfd, 400);
+                        valid_uri = 0;
+                        break;
+                    }
+                    request.uri[uri_index] = '\0';
+                    valid_uri = 1;
+                    version_start = i + 1;
+                    break;
+                }
+
+                // if i reaches size of uri, and we haven't made uri
+                // send 400 error
+                if (uri_index >= 64) {
+                    send_response(connfd, 400);
+                    valid_uri = 0;
+                    break;
+                }
+
+                // only accept valid characters
+                if ((buffer[i] >= 'A' && buffer[i] <= 'Z') ||
+                    (buffer[i] >= 'a' && buffer[i] <= 'z') ||
+                    buffer[i] == '.' ||
+                    buffer[i] == '-' ||isdigit(buffer[i])) {
+
+                    request.uri[uri_index++] = buffer[i];
+                } else {
+                    // else send bad request error
+                    send_response(connfd, 400);
+                    valid_uri = 0;
+                    break;
+                }
+            }
         } else {
-            send_response(connfd, 501);
+            send_response(connfd, 400);
+            valid_uri = 0;
+        }
+    }
+
+    if (valid_uri) {
+        for (int i = version_start; i < request.header_end; i++) {
+            
         }
     }
 
@@ -219,7 +279,7 @@ int main(int argc, char **argv) {
 
     char *endptr = NULL;
     errno = 0;
-                                // Pointer to first passed value. Pointer to where last read ends, base to turn number into
+    // Pointer to first passed value. Pointer to where last read ends, base to turn number into
     size_t port = (size_t) strtoull(argv[1], &endptr, 10);
 
     // check port overflow
