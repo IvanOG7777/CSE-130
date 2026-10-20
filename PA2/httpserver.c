@@ -6,6 +6,8 @@
  * @author Elder Ivan Argueta
  */
 
+#include <ctype.h>
+
 #include "listener_socket.h"
 #include "iowrapper.h"
 #include "protocol.h"
@@ -98,12 +100,16 @@ void handle_connection(int connfd) {
     request.header_end = 0;
 
     int continue_reading = 1;
+    int valid_buffer = 0;
+    int valid_method = 0;
+    int uri_start = 0;
+    int found_header = 0;
     char buffer[BUFFER_SIZE];
     int read_res = 0;
 
     while (continue_reading) {
 
-        if (request.bytes_read == BUFFER_SIZE) {
+        if (request.bytes_read >= BUFFER_SIZE) {
             continue_reading = 0;
             send_response(connfd, 400);
             continue;
@@ -114,12 +120,14 @@ void handle_connection(int connfd) {
 
         if (read_res == -1) {
             printf("Bad read in loop\n");
+            send_response(connfd, 500);
             break;
         }
 
         if (read_res == 0) {
-            printf("EOF in loop\n");
-            break;
+            continue_reading = 0;
+            send_response(connfd, 400);
+            continue;
         }
 
         request.bytes_read += read_res; // add to the amount of bytes read to the buffer
@@ -128,10 +136,68 @@ void handle_connection(int connfd) {
             for (int i = 0; i <= request.bytes_read - 4; i++) {
                 if (buffer[i] == '\r' && buffer[i+1] == '\n' && buffer[i+2] == '\r' && buffer[i+3] == '\n') {
                     request.header_end = i + 4;
+                    if (request.header_end > 2048) {
+                        valid_buffer = 0;
+                        continue_reading = 0;
+                        send_response(connfd, 400);
+                        break;
+                    }
+                    valid_buffer = 1;
                     continue_reading = 0;
+                    found_header = 1;
                     break;
                 }
             }
+        }
+
+        if (found_header == 0  && request.bytes_read >= 2048) {
+            valid_buffer = 0;
+            continue_reading = 0;
+            send_response(connfd, 400);
+            break;
+        }
+    }
+
+    if (valid_buffer) {
+        for (int i = 0; i < request.header_end; i++) {
+            if (i == 0) {
+                if (buffer[i] == ' ') {
+                    send_response(connfd, 400);
+                    valid_method = 0;
+                    break;
+                }
+            }
+
+            if (buffer[i] == ' ') {
+                request.method[i] = '\0';
+                valid_method = 1;
+                uri_start = i + 1;
+                break;
+            }
+
+            if (i == 8) {
+                send_response(connfd, 400);
+                valid_method = 0;
+                break;
+            }
+
+            if ((buffer[i] >= 'A' && buffer[i] <= 'Z') || (buffer[i] >= 'a' && buffer[i] <= 'z')) {
+                request.method[i] = buffer[i];
+            } else {
+                send_response(connfd, 400);
+                close(connfd);
+                return;
+            }
+        }
+    }
+
+    if (valid_method) {
+        if (strcmp(request.method, "GET") == 0) {
+            // parse URI here for GET
+        } else if (strcmp(request.method, "PUT") == 0) {
+            // parse URI for PUT
+        } else {
+            send_response(connfd, 501);
         }
     }
 
