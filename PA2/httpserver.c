@@ -28,13 +28,13 @@
 
 // Items that are sent in a request from client
 typedef struct Request_t {
-    char method[9];
-    char uri[65];
-    char version[9];
     size_t content_length;
     int has_content_length;
     int header_end;
     int bytes_read;
+    char method[9];
+    char version[9];
+    char uri[65];
 } Request;
 
 void send_response(int connfd, int code) {
@@ -92,39 +92,20 @@ void send_response(int connfd, int code) {
     write_n_bytes(connfd, response, length);
 }
 
-void handle_connection(int connfd) {
-    Request request;
-    request.bytes_read = 0;
-    request.content_length = 0;
-    request.has_content_length = 0;
-    request.header_end = 0;
+int read_header(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_buffer) {
 
+    int read_res = 0;
     int continue_reading = 1;
 
-    int valid_buffer = 0;
-    int valid_method = 0;
-    int valid_uri = 0;
-    int valid_version = 0;
-
-    int uri_start = 0;
-    int uri_index = 0;
-
-    int version_start = 0;
-    int valid_version_length = 0;
-    int version_index = 0;
-
-    char buffer[BUFFER_SIZE];
-    int read_res = 0;
-
     while (continue_reading) {
-        if (request.bytes_read >= BUFFER_SIZE) {
+        if (request->bytes_read >= BUFFER_SIZE) {
             continue_reading = 0;
             send_response(connfd, 400);
             continue;
         }
 
         // connfd is where to read from, buffer + bytes_read is where to place bytes at,
-        read_res = read(connfd, buffer + request.bytes_read, sizeof(buffer) - request.bytes_read);
+        read_res = read(connfd, buffer + request->bytes_read, BUFFER_SIZE - request->bytes_read);
         // read only remaining bytes to buffer + bytes_read from connfd
 
         if (read_res == -1) {
@@ -141,14 +122,14 @@ void handle_connection(int connfd) {
             continue;
         }
 
-        request.bytes_read += read_res; // add to the amount of bytes read to the buffer
+        request->bytes_read += read_res; // add to the amount of bytes read to the buffer
 
-        if (request.bytes_read >= 4) {
-            for (int i = 0; i <= request.bytes_read - 4; i++) {
+        if (request->bytes_read >= 4) {
+            for (int i = 0; i <= request->bytes_read - 4; i++) {
                 if (buffer[i] == '\r' && buffer[i + 1] == '\n' && buffer[i + 2] == '\r' && buffer[i + 3] == '\n') {
-                    request.header_end = i + 4;
+                    request->header_end = i + 4;
 
-                    if (request.header_end > 2048) {
+                    if (request->header_end > 2048) {
                         valid_buffer = 0;
                         continue_reading = 0;
                         send_response(connfd, 400);
@@ -162,7 +143,7 @@ void handle_connection(int connfd) {
             }
         }
 
-        if (request.header_end == 0 && request.bytes_read >= 2048) {
+        if (request->header_end == 0 && request->bytes_read >= 2048) {
             valid_buffer = 0;
             continue_reading = 0;
             send_response(connfd, 400);
@@ -170,10 +151,14 @@ void handle_connection(int connfd) {
         }
     }
 
+    return valid_buffer;
+}
+
+int read_method(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_buffer, int valid_method, int *uri_start) {
     // if we have made a valid header
     if (valid_buffer) {
         // loop until end of valid header
-        for (int i = 0; i < request.header_end; i++) {
+        for (int i = 0; i < request->header_end; i++) {
             if (i == 0) {
                 // if first char is a space
                 if (buffer[i] == ' ') {
@@ -186,9 +171,9 @@ void handle_connection(int connfd) {
 
             // check if we've seen a space indicating end of method
             if (buffer[i] == ' ') {
-                request.method[i] = '\0';
+                request->method[i] = '\0';
                 valid_method = 1;
-                uri_start = i + 1;
+                *uri_start = i + 1;
                 break;
             }
 
@@ -202,7 +187,7 @@ void handle_connection(int connfd) {
 
             // only accept valid chars
             if ((buffer[i] >= 'A' && buffer[i] <= 'Z') || (buffer[i] >= 'a' && buffer[i] <= 'z')) {
-                request.method[i] = buffer[i];
+                request->method[i] = buffer[i];
             } else {
                 // send bad request error
                 send_response(connfd, 400);
@@ -212,12 +197,18 @@ void handle_connection(int connfd) {
         }
     }
 
+    return valid_method;
+}
+
+int read_uri(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_method, int valid_uri, const int *uri_start, int *version_start) {
+    int uri_index = 0;
+
     // if we have made a valid method
     if (valid_method) {
-        if (buffer[uri_start] == '/') {
+        if (buffer[*uri_start] == '/') {
             // check if char at uri_start is a /
-            request.uri[uri_index++] = '/';
-            for (int i = uri_start + 1; i < request.header_end; i++) {
+            request->uri[uri_index++] = '/';
+            for (int i = *uri_start + 1; i < request->header_end; i++) {
                 // check for space char to end uri
                 if (buffer[i] == ' ') {
                     if (uri_index < 2) {
@@ -225,9 +216,9 @@ void handle_connection(int connfd) {
                         valid_uri = 0;
                         break;
                     }
-                    request.uri[uri_index] = '\0';
+                    request->uri[uri_index] = '\0';
                     valid_uri = 1;
-                    version_start = i + 1;
+                    *version_start = i + 1;
                     break;
                 }
 
@@ -244,13 +235,13 @@ void handle_connection(int connfd) {
                     (buffer[i] >= 'a' && buffer[i] <= 'z') ||
                     buffer[i] == '.' ||
                     buffer[i] == '-' || isdigit(buffer[i])) {
-                    request.uri[uri_index++] = buffer[i];
-                } else {
-                    // else send bad request error
-                    send_response(connfd, 400);
-                    valid_uri = 0;
-                    break;
-                }
+                    request->uri[uri_index++] = buffer[i];
+                    } else {
+                        // else send bad request error
+                        send_response(connfd, 400);
+                        valid_uri = 0;
+                        break;
+                    }
             }
         } else {
             send_response(connfd, 400);
@@ -258,22 +249,26 @@ void handle_connection(int connfd) {
         }
     }
 
+    return valid_uri;
+}
+
+int read_version(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_uri, int valid_version_length, int *version_start) {
+    int version_index = 0;
     // check if we have a valid uri
     if (valid_uri) {
         // loop starting from version start to end of header
-        for (int i = version_start; i < request.header_end; i++) {
+        for (int i = *version_start; i < request->header_end; i++) {
             // check i + 1 is still less than header_end AND if buffer at i is \r AND if buffer at i + 1 is \n
-            if (i + 1 < request.header_end && buffer[i] == '\r' && buffer[i + 1] == '\n') {
+            if (i + 1 < request->header_end && buffer[i] == '\r' && buffer[i + 1] == '\n') {
 
                 // check if index is not correct version size
                 if (version_index != 8) {
                     // send error code
                     send_response(connfd, 400);
-                    valid_version = 0;
                     break;
                 }
                 // add null terminator to version
-                request.version[version_index] = '\0';
+                request->version[version_index] = '\0';
                 valid_version_length = 1; // found valid version
                 break;
             }
@@ -282,22 +277,25 @@ void handle_connection(int connfd) {
             if (version_index >= 8) {
                 // send 400 error code
                 send_response(connfd, 400);
-                valid_version = 0;
                 break;
             }
             // finally add to version array
-            request.version[version_index++] = buffer[i];
+            request->version[version_index++] = buffer[i];
         }
     }
 
+    return valid_version_length;
+}
+
+int check_version(Request *request, int connfd, int valid_version_length, int valid_version) {
     if (valid_version_length) {
         // check if request.version has valid HTTP/ and digit.digit
-        if (strncmp(request.version, "HTTP/", 5) != 0 || !isdigit(request.version[5]) || request.version[6] != '.' || !isdigit(request.version[7])) {
+        if (strncmp(request->version, "HTTP/", 5) != 0 || !isdigit(request->version[5]) || request->version[6] != '.' || !isdigit(request->version[7])) {
             send_response(connfd, 400);
             valid_version = 0;
         } else {
             // check if version has 1 for both digit values in version
-            if (request.version[5] != '1' || request.version[7] != '1') {
+            if (request->version[5] != '1' || request->version[7] != '1') {
                 // if not send 505 error code
                 send_response(connfd,505);
                 valid_version = 0;
@@ -308,12 +306,37 @@ void handle_connection(int connfd) {
         }
     }
 
-    if (valid_method && valid_uri && valid_version) {
-        printf("Valid everything\n");
-        printf("Method: %s\n", request.method);
-        printf("URI: %s\n", request.uri);
-        printf("Version: %s\n", request.version);
-    }
+    return valid_version;
+}
+
+void handle_connection(int connfd) {
+    Request request;
+    request.bytes_read = 0;
+    request.content_length = 0;
+    request.has_content_length = 0;
+    request.header_end = 0;
+
+    int valid_buffer = 0;
+    int valid_method = 0;
+    int valid_uri = 0;
+    int valid_version = 0;
+
+    int uri_start = 0;
+
+    int version_start = 0;
+    int valid_version_length = 0;
+
+    char buffer[BUFFER_SIZE];
+
+    valid_buffer = read_header(buffer, &request, connfd, valid_buffer);
+
+    valid_method = read_method(buffer, &request, connfd, valid_buffer, valid_method, &uri_start);
+
+    valid_uri = read_uri(buffer, &request, connfd, valid_method, valid_uri, &uri_start, &version_start);
+
+    valid_version_length = read_version(buffer, &request, connfd, valid_uri, valid_version_length, &version_start);
+
+    valid_version = check_version(&request, connfd, valid_version_length, valid_version);
 
     close(connfd);
     return;
