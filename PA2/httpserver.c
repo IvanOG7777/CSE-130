@@ -110,6 +110,7 @@ void handle_connection(int connfd) {
     int uri_index = 0;
 
     int version_start = 0;
+    int valid_version_length = 0;
     int version_index = 0;
 
     char buffer[BUFFER_SIZE];
@@ -173,8 +174,10 @@ void handle_connection(int connfd) {
     if (valid_buffer) {
         // loop until end of valid header
         for (int i = 0; i < request.header_end; i++) {
-            if (i == 0) { // if first char is a space
-                if (buffer[i] == ' ') { // send bad request error
+            if (i == 0) {
+                // if first char is a space
+                if (buffer[i] == ' ') {
+                    // send bad request error
                     send_response(connfd, 400);
                     valid_method = 0;
                     break;
@@ -211,7 +214,8 @@ void handle_connection(int connfd) {
 
     // if we have made a valid method
     if (valid_method) {
-        if (buffer[uri_start] == '/') { // check if char at uri_start is a /
+        if (buffer[uri_start] == '/') {
+            // check if char at uri_start is a /
             request.uri[uri_index++] = '/';
             for (int i = uri_start + 1; i < request.header_end; i++) {
                 // check for space char to end uri
@@ -239,8 +243,7 @@ void handle_connection(int connfd) {
                 if ((buffer[i] >= 'A' && buffer[i] <= 'Z') ||
                     (buffer[i] >= 'a' && buffer[i] <= 'z') ||
                     buffer[i] == '.' ||
-                    buffer[i] == '-' ||isdigit(buffer[i])) {
-
+                    buffer[i] == '-' || isdigit(buffer[i])) {
                     request.uri[uri_index++] = buffer[i];
                 } else {
                     // else send bad request error
@@ -255,9 +258,53 @@ void handle_connection(int connfd) {
         }
     }
 
+    // check if we have a valid uri
     if (valid_uri) {
+        // loop starting from version start to end of header
         for (int i = version_start; i < request.header_end; i++) {
-            
+            // check i + 1 is still less than header_end AND if buffer at i is \r AND if buffer at i + 1 is \n
+            if (i + 1 < request.header_end && buffer[i] == '\r' && buffer[i + 1] == '\n') {
+
+                // check if index is not correct version size
+                if (version_index != 8) {
+                    // send error code
+                    send_response(connfd, 400);
+                    valid_version = 0;
+                    break;
+                }
+                // add null terminator to version
+                request.version[version_index] = '\0';
+                valid_version_length = 1; // found valid version
+                break;
+            }
+
+            // if valid index is greater than or equal to 8
+            if (version_index >= 8) {
+                // send 400 error code
+                send_response(connfd, 400);
+                valid_version = 0;
+                break;
+            }
+            // finally add to version array
+            request.version[version_index++] = buffer[i];
+        }
+    }
+
+    if (valid_version_length) {
+        // check if request.version has valid HTTP/ and digit.digit
+        if (strncmp(request.version, "HTTP/", 5) != 0 || !isdigit(request.version[5]) || request.version[6] != '.' || !isdigit(request.version[7])) {
+            send_response(connfd, 400);
+            valid_version = 0;
+        } else {
+            // check if version has 1 for both digit values in version
+            if (request.version[5] != '1' || request.version[7] != '1') {
+                // if not send 505 error code
+                send_response(connfd,505);
+                valid_version = 0;
+            } else {
+                // else we have a valid version
+                valid_version = 1;
+            }
         }
     }
 
