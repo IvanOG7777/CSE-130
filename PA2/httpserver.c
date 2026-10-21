@@ -308,6 +308,13 @@ void handle_connection(int connfd) {
         }
     }
 
+    if (valid_method && valid_uri && valid_version) {
+        printf("Valid everything\n");
+        printf("Method: %s\n", request.method);
+        printf("URI: %s\n", request.uri);
+        printf("Version: %s\n", request.version);
+    }
+
     close(connfd);
     return;
 }
