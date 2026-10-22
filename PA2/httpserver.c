@@ -30,6 +30,7 @@
 typedef struct Request_t {
     size_t content_length;
     int has_content_length;
+    int header_start;
     int header_end;
     int bytes_read;
     char method[9];
@@ -156,6 +157,7 @@ int read_header(char buffer[BUFFER_SIZE], Request *request, int connfd, int vali
 
 int read_method(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_buffer, int valid_method, int *uri_start) {
     // if we have made a valid header
+    int error_sent = 0;
     if (valid_buffer) {
         // loop until end of valid header
         for (int i = 0; i < request->header_end; i++) {
@@ -165,6 +167,7 @@ int read_method(char buffer[BUFFER_SIZE], Request *request, int connfd, int vali
                     // send bad request error
                     send_response(connfd, 400);
                     valid_method = 0;
+                    error_sent = 1;
                     break;
                 }
             }
@@ -182,6 +185,7 @@ int read_method(char buffer[BUFFER_SIZE], Request *request, int connfd, int vali
             if (i == 8) {
                 send_response(connfd, 400);
                 valid_method = 0;
+                error_sent = 1;
                 break;
             }
 
@@ -192,9 +196,14 @@ int read_method(char buffer[BUFFER_SIZE], Request *request, int connfd, int vali
                 // send bad request error
                 send_response(connfd, 400);
                 valid_method = 0;
+                error_sent = 1;
                 break;
             }
         }
+    }
+
+    if (!valid_method && !error_sent) {
+        send_response(connfd, 400);
     }
 
     return valid_method;
@@ -202,6 +211,7 @@ int read_method(char buffer[BUFFER_SIZE], Request *request, int connfd, int vali
 
 int read_uri(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_method, int valid_uri, const int *uri_start, int *version_start) {
     int uri_index = 0;
+    int error_sent = 0;
 
     // if we have made a valid method
     if (valid_method) {
@@ -214,6 +224,7 @@ int read_uri(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_m
                     if (uri_index < 2) {
                         send_response(connfd, 400);
                         valid_uri = 0;
+                        error_sent = 1;
                         break;
                     }
                     request->uri[uri_index] = '\0';
@@ -227,6 +238,7 @@ int read_uri(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_m
                 if (uri_index >= 64) {
                     send_response(connfd, 400);
                     valid_uri = 0;
+                    error_sent = 1;
                     break;
                 }
 
@@ -240,13 +252,19 @@ int read_uri(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_m
                         // else send bad request error
                         send_response(connfd, 400);
                         valid_uri = 0;
+                        error_sent = 1;
                         break;
                     }
             }
         } else {
             send_response(connfd, 400);
             valid_uri = 0;
+            error_sent = 1;
         }
+    }
+
+    if (!valid_uri && !error_sent) {
+        send_response(connfd, 400);
     }
 
     return valid_uri;
@@ -254,6 +272,7 @@ int read_uri(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_m
 
 int read_version(char buffer[BUFFER_SIZE], Request *request, int connfd, int valid_uri, int valid_version_length, int *version_start) {
     int version_index = 0;
+    int error_sent = 0;
     // check if we have a valid uri
     if (valid_uri) {
         // loop starting from version start to end of header
@@ -265,10 +284,12 @@ int read_version(char buffer[BUFFER_SIZE], Request *request, int connfd, int val
                 if (version_index != 8) {
                     // send error code
                     send_response(connfd, 400);
+                    error_sent = 1;
                     break;
                 }
                 // add null terminator to version
                 request->version[version_index] = '\0';
+                request->header_start = i + 2;
                 valid_version_length = 1; // found valid version
                 break;
             }
@@ -277,10 +298,15 @@ int read_version(char buffer[BUFFER_SIZE], Request *request, int connfd, int val
             if (version_index >= 8) {
                 // send 400 error code
                 send_response(connfd, 400);
+                error_sent = 1;
                 break;
             }
             // finally add to version array
             request->version[version_index++] = buffer[i];
+        }
+
+        if (!valid_version_length && !error_sent) {
+            send_response(connfd, 400);
         }
     }
 
@@ -314,6 +340,7 @@ void handle_connection(int connfd) {
     request.bytes_read = 0;
     request.content_length = 0;
     request.has_content_length = 0;
+    request.header_start = 0;
     request.header_end = 0;
 
     int valid_buffer = 0;
@@ -330,13 +357,39 @@ void handle_connection(int connfd) {
 
     valid_buffer = read_header(buffer, &request, connfd, valid_buffer);
 
-    valid_method = read_method(buffer, &request, connfd, valid_buffer, valid_method, &uri_start);
+    if (valid_buffer) {
+        valid_method = read_method(buffer, &request, connfd, valid_buffer, valid_method, &uri_start);
+    } else {
+        close(connfd);
+        return;
+    }
 
-    valid_uri = read_uri(buffer, &request, connfd, valid_method, valid_uri, &uri_start, &version_start);
+    if (valid_method) {
+        valid_uri = read_uri(buffer, &request, connfd, valid_method, valid_uri, &uri_start, &version_start);
+    } else {
+        close(connfd);
+        return;
+    }
 
-    valid_version_length = read_version(buffer, &request, connfd, valid_uri, valid_version_length, &version_start);
+    if (valid_uri) {
+        valid_version_length = read_version(buffer, &request, connfd, valid_uri, valid_version_length, &version_start);
+    } else {
+        close(connfd);
+        return;
+    }
 
-    valid_version = check_version(&request, connfd, valid_version_length, valid_version);
+    if (valid_version_length) {
+        valid_version = check_version(&request, connfd, valid_version_length, valid_version);
+    } else {
+        close(connfd);
+        return;
+    }
+
+    if (!valid_version) {
+        close(connfd);
+        return;
+    }
+
 
     close(connfd);
     return;
