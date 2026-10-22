@@ -32,6 +32,8 @@ typedef struct Request_t {
     int has_content_length;
     int header_start;
     int header_end;
+    int body_start;
+    int body_end;
     int bytes_read;
     char method[9];
     char version[9];
@@ -333,6 +335,37 @@ int check_version(Request *request, int connfd, int valid_version_length, int va
     }
 
     return valid_version;
+}
+
+int read_content(char buffer[BUFFER_SIZE], Request *request, int connfd) {
+    int valid_content = 0;
+    int error_sent = 0;
+
+    int line_start = request->header_start;
+    int i = line_start;
+
+    while (i < request->header_end) {
+        if (i + 1 < request->header_end && buffer[i] == '\r' && buffer[i + 1] == '\n') {
+            int line_length = i - line_start;
+
+            if (line_length == 0) {
+                valid_content = 1;
+            }
+
+
+
+            line_start = i + 2;
+            i = line_start;
+        } else {
+            i++;
+        }
+    }
+
+    if (!valid_content && !error_sent) {
+        send_response(connfd, 400);
+    }
+
+    return valid_content;
 }
 
 void handle_connection(int connfd) {
