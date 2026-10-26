@@ -570,20 +570,58 @@ int handle_put(char buffer[BUFFER_SIZE], Request *request, int connfd) {
 
     struct stat sb;
 
-    int open_res;
+    int file_exists = 0;
 
+    // if not content length is found send error
     if (!request->has_content_length) {
         send_response(connfd, 400);
         return put_ok;
     }
 
-    stat(request->uri + 1, &sb);
-    if (errno == ENOENT) {
-        open_res = open(request->uri + 1, O_CREAT, 0644);
+    // find out if file exists
+    int stat_value = stat(request->uri + 1, &sb);
+
+    if (stat_value == 0) {
+        if (!S_ISREG(sb.st_mode)) {
+            send_response(connfd, 403);
+            return put_ok;
+        }
+        file_exists = 1;
+    }
+
+    if (stat_value < 0) {
+        if (errno == ENOENT) {
+            file_exists = 0;
+        } else if (errno == EACCES) {
+            send_response(connfd, 403);
+            return put_ok;
+        } else {
+            send_response(connfd, 500);
+            return put_ok;
+        }
     }
 
 
+    int open_res = open(request->uri + 1, O_CREAT | O_WRONLY | O_TRUNC, 0644);
 
+    if (open_res < 0) {
+        if (errno == EACCES) {
+            send_response(connfd, 403);
+            return put_ok;
+        } else if (errno == EPERM) {
+            send_response(connfd, 403);
+            return put_ok;
+        } else if (errno == EISDIR){
+            send_response(connfd, 403);
+            return put_ok;
+        } else {
+            send_response(connfd, 500);
+            return put_ok;
+        }
+    }
+
+
+    close(open_res);
     return put_ok;
 }
 
