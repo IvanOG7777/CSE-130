@@ -347,6 +347,8 @@ int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) 
     char value[129];
     int value_index = 0;
 
+    int content_length_found = 0;
+
     // while index is less than header_end value
     while (i < request->header_end) {
         // check if i + 1 is valid location and if buffer at i and i + 1 is \r\n
@@ -361,34 +363,86 @@ int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) 
             if (line_length > 0) {
                 int colon_index = -1;
 
+                // loop from line_start until \r where i is
                 for (int j = line_start; j < i; j++) {
+                    // if we find a colon break out of for loop
                     if (buffer[j] == ':') {
                         colon_index = j;
                         break;
                     }
                 }
 
+                // no colon found send error
                 if (colon_index == -1) {
                     send_response(connfd, 400);
                     error_sent = 1;
                     break;
                 }
 
-                if (buffer[colon_index + 1] == ' ') {
-                    for (int j = colon_index + 2; j < i; j++) {
-                        if (value_index > 128) {
+                int key_length = colon_index - line_start;
+                if (key_length < 1 && key_length > 128) {
+                    send_response(connfd, 400);
+                    error_sent = 1;
+                    return valid_content;
+                }
+                if (key_length >= 1 && key_length <= 128) {
+                    for (int k = line_start; k < colon_index; k++) {
+                        if ((buffer[k] >= 'a' && buffer[k] <= 'z') || (buffer[k] >= 'A' && buffer[k] <= 'Z') || (buffer[k] >= '0' && buffer[k] <= '9') || buffer[k] == '.' || buffer[k] == '-') {
+                        } else {
                             send_response(connfd, 400);
                             error_sent = 1;
-                            break;
+                            return valid_content;
                         }
-                        value[value_index++] = buffer[j];
+                    }
+                }
+
+                if (key_length == 14) {
+                    if (strncmp(&buffer[line_start], "Content-Length", key_length) == 0) content_length_found = 1;
+                } else {
+                    content_length_found = 0;
+                    continue;
+                }
+
+                key_length = 0;
+
+                // check if there's a space after colon
+                if (buffer[colon_index + 1] == ' ') {
+                    // start 2 places after colon to get first value character
+                    for (int j = colon_index + 2; j < i; j++) {
+                        // if value_index is equal to value buffer length
+                        // throw error
+                        if (value_index == 128) {
+                            send_response(connfd, 400);
+                            error_sent = 1;
+                            return valid_content;
+                        }
+                        // check if value is between 32 and 126  ascii character
+                        if (buffer[j] >= 32 && buffer[j] <= 126) {
+                            value[value_index++] = buffer[j];
+                        } else { // else send error
+                            send_response(connfd, 400);
+                            error_sent = 1;
+                            return valid_content;
+                        }
                     }
 
+                    // if we didn't move value_index send error
+                    if (value_index == 0) {
+                        send_response(connfd, 400);
+                        error_sent = 1;
+                        break;
+                    }
+
+                    // add null terminator and reset value_index in case of another loop.
                     value[value_index] = '\0';
                     value_index = 0;
 
                     // Check if value is valid number
                     // Check for valid Content-Length
+                } else {
+                    send_response(connfd, 400);
+                    error_sent = 1;
+                    break;
                 }
             }
 
