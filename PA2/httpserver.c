@@ -620,6 +620,15 @@ int handle_put(char buffer[BUFFER_SIZE], Request *request, int connfd) {
         }
     }
 
+    size_t buffered_bytes = request->bytes_read - request->header_end;
+
+    ssize_t write_n_bytes_value = write_n_bytes(open_res, buffer + request->header_end, buffered_bytes);
+
+    if (write_n_bytes_value != request->content_length) {
+        close(open_res);
+        return put_ok;
+    }
+
 
     close(open_res);
     return put_ok;
