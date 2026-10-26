@@ -487,29 +487,77 @@ int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) 
 }
 
 int handle_get(const Request *request, int connfd) {
-    int error_sent = 0;
-    int get_ok = 0;
+    struct stat sb;
+    int get_ok = 0; // return 1 for valid get handling else 0 for failure
 
-    errno = 0;
     int open_res = open(request->uri + 1, O_RDONLY);
+
+    // check what type of error was sent to errno
     if (open_res < 0) {
         if (errno == ENOENT) {
             send_response(connfd, 404);
-            error_sent = 1;
             return get_ok;
         } else if (errno == EACCES) {
             send_response(connfd, 403);
-            error_sent = 1;
             return get_ok;
         } else {
             send_response(connfd, 500);
-            error_sent = 1;
             return get_ok;
         }
     }
 
+    if (fstat(open_res, &sb) < 0) {
+        send_response(connfd, 500);
+        close(open_res);
+        return get_ok;
+    }
 
+    if (!S_ISREG(sb.st_mode)) {
+        send_response(connfd, 403);
+        close(open_res);
+        return get_ok;
+    }
+
+    if (sb.st_size < 0) {
+        send_response(connfd, 500);
+        close(open_res);
+        return get_ok;
+    }
+
+    size_t file_size = (size_t)sb.st_size;
+
+    char response[256];
+    const char *ok = "OK";
+    const int code = 200;
+    int length = snprintf(response, sizeof(response), "HTTP/1.1 %d %s\r\nContent-Length: %zu\r\n\r\n", code, ok, file_size);
+
+    if (length < 0) {
+        close(open_res);
+        return get_ok;
+    }
+
+    if ((size_t) length >= sizeof(response)) {
+        close(open_res);
+        return get_ok;
+    }
+
+    ssize_t write_n_bytes_value = write_n_bytes(connfd, response, length);
+
+    if (write_n_bytes_value < 0 || write_n_bytes_value != length ) {
+        close(open_res);
+        return get_ok;
+    }
+
+    ssize_t pass_n_bytes_value = pass_n_bytes(open_res, connfd, file_size);
+
+    if (pass_n_bytes_value < 0 || pass_n_bytes_value != file_size) {
+        close(open_res);
+        return get_ok;
+    }
+
+    get_ok = 1;
     close(open_res);
+
     return get_ok;
 }
 
@@ -578,6 +626,14 @@ void handle_connection(int connfd) {
     if (!valid_content_length) {
         close(connfd);
         return;
+    }
+
+    if (request.method == "GET") {
+        handle_get(&request, connfd);
+    } else if (request.method == "PUT") {
+        handle_put(&request, connfd);
+    } else {
+        send_response(connfd, 501);
     }
 
 
