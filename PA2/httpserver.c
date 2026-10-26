@@ -337,22 +337,60 @@ int check_version(Request *request, int connfd, int valid_version_length, int va
     return valid_version;
 }
 
-int read_content(char buffer[BUFFER_SIZE], Request *request, int connfd) {
+int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) {
     int valid_content = 0;
     int error_sent = 0;
 
     int line_start = request->header_start;
     int i = line_start;
 
+    char value[129];
+    int value_index = 0;
+
+    // while index is less than header_end value
     while (i < request->header_end) {
+        // check if i + 1 is valid location and if buffer at i and i + 1 is \r\n
         if (i + 1 < request->header_end && buffer[i] == '\r' && buffer[i + 1] == '\n') {
             int line_length = i - line_start;
 
             if (line_length == 0) {
                 valid_content = 1;
+                break;
             }
 
+            if (line_length > 0) {
+                int colon_index = -1;
 
+                for (int j = line_start; j < i; j++) {
+                    if (buffer[j] == ':') {
+                        colon_index = j;
+                        break;
+                    }
+                }
+
+                if (colon_index == -1) {
+                    send_response(connfd, 400);
+                    error_sent = 1;
+                    break;
+                }
+
+                if (buffer[colon_index + 1] == ' ') {
+                    for (int j = colon_index + 2; j < i; j++) {
+                        if (value_index > 128) {
+                            send_response(connfd, 400);
+                            error_sent = 1;
+                            break;
+                        }
+                        value[value_index++] = buffer[j];
+                    }
+
+                    value[value_index] = '\0';
+                    value_index = 0;
+
+                    // Check if value is valid number
+                    // Check for valid Content-Length
+                }
+            }
 
             line_start = i + 2;
             i = line_start;
