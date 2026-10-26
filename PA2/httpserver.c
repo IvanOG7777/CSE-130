@@ -433,15 +433,36 @@ int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) 
                     // add null terminator and reset value_index in case of another loop.
                     value[value_index] = '\0';
 
-                    // Check if value is valid number
+                    // Check if value's characters are valid numbers
                     if (content_length_found) {
                         for (int v = 0; v < value_index; v++) {
                             if (!isdigit(value[v])) {
                                 send_response(connfd, 400);
                                 error_sent = 1;
-                                break;
+                                return valid_content;
                             }
                         }
+
+                        // convert to size_t number
+                        char *end;
+                        errno = 0;
+                        size_t length = strtoul(value, &end, 10);
+
+                        // overflow error check
+                        if (errno == ERANGE) {
+                            send_response(connfd, 400);
+                            error_sent = 1;
+                            return valid_content;
+                        }
+
+                        // end ptr isn't pointing to null terminator
+                        if (*end != '\0') {
+                            send_response(connfd, 400);
+                            return valid_content;
+                        }
+
+                        request->content_length = length;
+                        request->has_content_length = 1;
                     }
 
                 } else {
@@ -462,8 +483,38 @@ int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) 
     if (!valid_content && !error_sent) {
         send_response(connfd, 400);
     }
-
     return valid_content;
+}
+
+int handle_get(const Request *request, int connfd) {
+    int error_sent = 0;
+    int get_ok = 0;
+
+    errno = 0;
+    int open_res = open(request->uri + 1, O_RDONLY);
+    if (open_res < 0) {
+        if (errno == ENOENT) {
+            send_response(connfd, 404);
+            error_sent = 1;
+            return get_ok;
+        } else if (errno == EACCES) {
+            send_response(connfd, 403);
+            error_sent = 1;
+            return get_ok;
+        } else {
+            send_response(connfd, 500);
+            error_sent = 1;
+            return get_ok;
+        }
+    }
+
+
+    close(open_res);
+    return get_ok;
+}
+
+void handle_put() {
+
 }
 
 void handle_connection(int connfd) {
@@ -478,6 +529,7 @@ void handle_connection(int connfd) {
     int valid_method = 0;
     int valid_uri = 0;
     int valid_version = 0;
+    int valid_content_length = 0;
 
     int uri_start = 0;
 
@@ -516,7 +568,14 @@ void handle_connection(int connfd) {
         return;
     }
 
-    if (!valid_version) {
+    if (valid_version) {
+        valid_content_length = read_content_length(buffer, &request, connfd);
+    } else {
+        close(connfd);
+        return;
+    }
+
+    if (!valid_content_length) {
         close(connfd);
         return;
     }
