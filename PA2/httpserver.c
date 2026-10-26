@@ -347,10 +347,10 @@ int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) 
     char value[129];
     int value_index = 0;
 
-    int content_length_found = 0;
-
     // while index is less than header_end value
     while (i < request->header_end) {
+        int content_length_found = 0;
+        value_index = 0;
         // check if i + 1 is valid location and if buffer at i and i + 1 is \r\n
         if (i + 1 < request->header_end && buffer[i] == '\r' && buffer[i + 1] == '\n') {
             int line_length = i - line_start;
@@ -380,11 +380,7 @@ int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) 
                 }
 
                 int key_length = colon_index - line_start;
-                if (key_length < 1 && key_length > 128) {
-                    send_response(connfd, 400);
-                    error_sent = 1;
-                    return valid_content;
-                }
+
                 if (key_length >= 1 && key_length <= 128) {
                     for (int k = line_start; k < colon_index; k++) {
                         if ((buffer[k] >= 'a' && buffer[k] <= 'z') || (buffer[k] >= 'A' && buffer[k] <= 'Z') || (buffer[k] >= '0' && buffer[k] <= '9') || buffer[k] == '.' || buffer[k] == '-') {
@@ -394,16 +390,17 @@ int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) 
                             return valid_content;
                         }
                     }
+                } else {
+                    send_response(connfd, 400);
+                    error_sent = 1;
+                    return valid_content;
                 }
 
                 if (key_length == 14) {
                     if (strncmp(&buffer[line_start], "Content-Length", key_length) == 0) content_length_found = 1;
                 } else {
                     content_length_found = 0;
-                    continue;
                 }
-
-                key_length = 0;
 
                 // check if there's a space after colon
                 if (buffer[colon_index + 1] == ' ') {
@@ -435,10 +432,18 @@ int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) 
 
                     // add null terminator and reset value_index in case of another loop.
                     value[value_index] = '\0';
-                    value_index = 0;
 
                     // Check if value is valid number
-                    // Check for valid Content-Length
+                    if (content_length_found) {
+                        for (int v = 0; v < value_index; v++) {
+                            if (!isdigit(value[v])) {
+                                send_response(connfd, 400);
+                                error_sent = 1;
+                                break;
+                            }
+                        }
+                    }
+
                 } else {
                     send_response(connfd, 400);
                     error_sent = 1;
@@ -446,6 +451,7 @@ int read_content_length(char buffer[BUFFER_SIZE], Request *request, int connfd) 
                 }
             }
 
+            // skip over current \r\n to next content header
             line_start = i + 2;
             i = line_start;
         } else {
