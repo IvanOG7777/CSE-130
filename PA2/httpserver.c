@@ -506,18 +506,21 @@ int handle_get(const Request *request, int connfd) {
         }
     }
 
+    // check if stat was successful
     if (fstat(open_res, &sb) < 0) {
         send_response(connfd, 500);
         close(open_res);
         return get_ok;
     }
 
+    // check if we have the right permission for file
     if (!S_ISREG(sb.st_mode)) {
         send_response(connfd, 403);
         close(open_res);
         return get_ok;
     }
 
+    // check if num bytes in file is valid
     if (sb.st_size < 0) {
         send_response(connfd, 500);
         close(open_res);
@@ -526,6 +529,7 @@ int handle_get(const Request *request, int connfd) {
 
     size_t file_size = (size_t)sb.st_size;
 
+    // send response
     char response[256];
     const char *ok = "OK";
     const int code = 200;
@@ -561,8 +565,26 @@ int handle_get(const Request *request, int connfd) {
     return get_ok;
 }
 
-void handle_put() {
+int handle_put(char buffer[BUFFER_SIZE], Request *request, int connfd) {
+    int put_ok = 0;
 
+    struct stat sb;
+
+    int open_res;
+
+    if (!request->has_content_length) {
+        send_response(connfd, 400);
+        return put_ok;
+    }
+
+    stat(request->uri + 1, &sb);
+    if (errno == ENOENT) {
+        open_res = open(request->uri + 1, O_CREAT, 0644);
+    }
+
+
+
+    return put_ok;
 }
 
 void handle_connection(int connfd) {
@@ -628,10 +650,18 @@ void handle_connection(int connfd) {
         return;
     }
 
-    if (request.method == "GET") {
-        handle_get(&request, connfd);
-    } else if (request.method == "PUT") {
-        handle_put(&request, connfd);
+    if (strcmp(request.method, "GET") == 0) {
+        int completed = handle_get(&request, connfd);
+        if (!completed) {
+            send_response(connfd, 501);
+            close(connfd);
+        }
+    } else if (strcmp(request.method, "PUT") == 0) {
+        int completed = handle_put(buffer, &request, connfd);
+        if (!completed) {
+            send_response(connfd, 501);
+            close(connfd);
+        }
     } else {
         send_response(connfd, 501);
     }
