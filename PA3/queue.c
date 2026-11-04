@@ -85,37 +85,49 @@ queue_t *queue_new(int size) {
 }
 
 void queue_delete(queue_t **q) {
-    pthread_mutex_destroy(&(*q)->mutex);
-    pthread_cond_destroy(&(*q)->not_full);
-    pthread_cond_destroy(&(*q)->not_empty);
+    if (q != NULL && *q != NULL) {
+        pthread_mutex_destroy(&(*q)->mutex);
+        pthread_cond_destroy(&(*q)->not_full);
+        pthread_cond_destroy(&(*q)->not_empty);
 
-    free((*q)->buffer);
-    (*q)->buffer = NULL;
+        free((*q)->buffer);
+        (*q)->buffer = NULL;
 
-    free(*q);
-    *q = NULL;
+        free(*q);
+        *q = NULL;
+    }
 }
 
 bool queue_push(queue_t *q, void *elem) {
 
-    while (q->tail - q->head == q->buffer_size) {} // Make producers wait if buffer is full before adding element
+    if (q == NULL) return false;
 
-    int buffer_index = q->tail % q->buffer_size; // get the remainder of the tail/buffer_sze as index to buffer
+    // lock mutex for myself so other threads can get it
+    pthread_mutex_lock(&q->mutex);
+
+    // make producer wait while buffer is full
+    while (q->tail - q->head == q->buffer_size) {
+        pthread_cond_wait(&q->not_full, &q->mutex);
+    }
+
+    // use remainder as index to write into
+    int buffer_index = q->tail % q->buffer_size;
 
     q->buffer[buffer_index] = elem;
 
     q->tail += 1;
 
+    pthread_cond_signal(&q->not_empty);
+
+    pthread_mutex_unlock(&q->mutex);
     return true;
 }
 
 bool queue_pop(queue_t *q, void **elem) {
 
-    while (q->tail == q->head) {}
+    if (q == NULL) return false;
 
-    int buffer_index = q->head % q->buffer_size;
-
-    elem = buffer_index[buffer_index];
+    pthread_mutex_lock(&q->mutex);
 
     return true;
 }
