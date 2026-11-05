@@ -113,13 +113,14 @@ bool queue_push(queue_t *q, void *elem) {
     // use remainder as index to write into
     int buffer_index = q->tail % q->buffer_size;
 
+    // add the element to array and move tail up
     q->buffer[buffer_index] = elem;
-
     q->tail += 1;
 
+    // signal to consumer threads and unlock mutex
     pthread_cond_signal(&q->not_empty);
-
     pthread_mutex_unlock(&q->mutex);
+
     return true;
 }
 
@@ -128,6 +129,19 @@ bool queue_pop(queue_t *q, void **elem) {
     if (q == NULL) return false;
 
     pthread_mutex_lock(&q->mutex);
+
+    while (q->tail == q->head) {
+        pthread_cond_wait(&q->not_empty, &q->mutex);
+    }
+
+    int buffer_index = q->head % q->buffer_size;
+
+    *elem = q->buffer[buffer_index];
+    q->head += 1;
+
+    // signal to producer threads and unlock mutex
+    pthread_cond_signal(&q->not_full);
+    pthread_mutex_unlock(&q->mutex);
 
     return true;
 }

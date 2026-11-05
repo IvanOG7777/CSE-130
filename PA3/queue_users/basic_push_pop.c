@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
   }
 
   // expect to pop values 0,...,9
-  for (int64_t i = 0; i < 10; ++i) {
+  for (uintptr_t i = 0; i < 10; ++i) {
     queue_pop(q, (void **)&r);
     if (r != i) {
       // if not, then we failed
