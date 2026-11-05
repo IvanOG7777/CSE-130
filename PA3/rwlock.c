@@ -11,15 +11,18 @@
 
 struct rwlock {
     int total_active_readers;
-    int total_readers;
-    int waiting_readers;
-    int waiting_writers;
-    uint32_t internal_n;
+    int waiting_readers; // tracks the waiting writers
+    int waiting_writers; // tracks the waiting readers
     bool writer_active;
+
+    int total_readers; // how many readers have been admitted for batch between writers
+    uint32_t internal_n; // count for batched readers per writer
 
     PRIORITY rw_lock_type;
 
     pthread_mutex_t internal_mutex;
+
+    // notification for other threads
     pthread_cond_t no_readers;
     pthread_cond_t no_writers;
 };
@@ -83,5 +86,15 @@ void rwlock_delete(rwlock_t **rw) {
 }
 
 void reader_lock(rwlock_t *rw) {
-    
+
+    pthread_mutex_lock(&rw->internal_mutex);
+
+    // make reader wait until flag has been set to false
+    while (rw->writer_active == true) {
+        pthread_cond_wait(&rw->no_writers, &rw->internal_mutex); // release mutex and notify thread when done
+    }
+
+    rw->total_active_readers++;
+
+    pthread_mutex_unlock(&rw->internal_mutex);
 }
