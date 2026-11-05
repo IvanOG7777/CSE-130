@@ -72,5 +72,16 @@ rwlock_t *rwlock_new(PRIORITY p, uint32_t n) {
 }
 
 void rwlock_delete(rwlock_t **rw) {
+    if (rw != NULL && *rw != NULL) {
+        pthread_mutex_destroy(&(*rw)->internal_mutex);
+        pthread_cond_destroy(&(*rw)->no_readers);
+        pthread_cond_destroy(&(*rw)->no_writers);
+
+        free(*rw);
+        *rw = NULL;
+    }
+}
+
+void reader_lock(rwlock_t *rw) {
     
 }
