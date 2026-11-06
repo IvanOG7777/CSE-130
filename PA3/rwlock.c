@@ -11,8 +11,8 @@
 
 struct rwlock {
     int total_active_readers;
-    int waiting_readers; // tracks the waiting writers
-    int waiting_writers; // tracks the waiting readers
+    int waiting_readers; // tracks the waiting readers
+    int waiting_writers; // tracks the waiting writers
     bool writer_active;
 
     int total_readers; // how many readers have been admitted for batch between writers
@@ -126,15 +126,18 @@ void writer_lock(rwlock_t *rw) {
 
     if (rw->rw_lock_type == N_WAY) { // nway priority
         while (rw->writer_active == true || rw->total_active_readers > 0 || (rw->total_readers < rw->internal_n && rw->waiting_readers > 0)) {
-            pthread_cond_broadcast(&rw->no_writers);
-            
+
+            if (rw->writer_active == false && rw->total_readers < rw->internal_n && rw->waiting_readers > 0) {
+                pthread_cond_broadcast(&rw->no_writers);
+            }
+
             rw->waiting_writers++;
             pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
             rw->waiting_writers--;
         }
         rw->writer_active = true;
     } else if (rw->rw_lock_type == READERS) { // reader priority
-        while (rw->writer_active == true || rw->total_active_readers > 0 || rw->waiting_readers > 0) {
+        while (rw->writer_active == true || rw->total_active_readers > 0 || rw->waiting_readers > 0) { // wait if there is active writer OR if active_readers OR if there are waiting_readers
             rw->waiting_writers++;
             pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
             rw->waiting_writers--;
@@ -142,7 +145,7 @@ void writer_lock(rwlock_t *rw) {
 
         rw->writer_active = true;
     } else { // writer priority
-        while (rw->writer_active == true || rw->total_active_readers > 0) {
+        while (rw->writer_active == true || rw->total_active_readers > 0) { // wait if there is active writer OR if there are active readers
             rw->waiting_writers++;
             pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
             rw->waiting_writers--;
@@ -155,4 +158,9 @@ void writer_lock(rwlock_t *rw) {
 }
 
 void writer_unlock(rwlock_t *rw) {
+    pthread_mutex_lock(&rw->internal_mutex);
+
+
+
+    pthread_mutex_unlock(&rw->internal_mutex);
 }
