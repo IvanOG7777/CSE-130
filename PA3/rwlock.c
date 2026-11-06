@@ -28,7 +28,6 @@ struct rwlock {
 };
 
 rwlock_t *rwlock_new(PRIORITY p, uint32_t n) {
-
     rwlock_t *new_rwlock = malloc(sizeof(rwlock_t));
 
     if (new_rwlock == NULL) return NULL;
@@ -86,15 +85,38 @@ void rwlock_delete(rwlock_t **rw) {
 }
 
 void reader_lock(rwlock_t *rw) {
-
     pthread_mutex_lock(&rw->internal_mutex);
 
-    // make reader wait until flag has been set to false
-    while (rw->writer_active == true) {
-        pthread_cond_wait(&rw->no_writers, &rw->internal_mutex); // release mutex and notify thread when done
+    if (rw->rw_lock_type == N_WAY) {
+        // make reader wait if there is a current active writer OR if waiting writers is more than 0 AND allowance for readers has been meet
+        while (rw->writer_active == true || (rw->waiting_writers > 0 && rw->total_readers >= rw->internal_n)) {
+            rw->waiting_readers++;
+            pthread_cond_wait(&rw->no_writers, &rw->internal_mutex);
+            // temporary release mutex, gets put to sleep and waits to be awoken
+            rw->waiting_readers--;
+        }
+
+        rw->total_active_readers++;
+        rw->total_readers++;
+    } else {
+        // wait if writer is active OR if priority type is WRITERS AND there are waiting writer threads
+        while (rw->writer_active == true || (rw->rw_lock_type == WRITERS && rw->waiting_writers > 0)) {
+            rw->waiting_readers++;
+            pthread_cond_wait(&rw->no_writers, &rw->internal_mutex);
+            // temporary release mutex, gets put to sleep and waits to be awoken
+            rw->waiting_readers--;
+        }
+
+        rw->total_active_readers++;
     }
 
-    rw->total_active_readers++;
+    pthread_mutex_unlock(&rw->internal_mutex);
+}
+
+void reader_unlock(rwlock_t *rw) {
+    pthread_mutex_lock(&rw->internal_mutex);
+    rw->total_active_readers--;
+    
 
     pthread_mutex_unlock(&rw->internal_mutex);
 }
