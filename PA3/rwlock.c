@@ -116,7 +116,43 @@ void reader_lock(rwlock_t *rw) {
 void reader_unlock(rwlock_t *rw) {
     pthread_mutex_lock(&rw->internal_mutex);
     rw->total_active_readers--;
-    
+
 
     pthread_mutex_unlock(&rw->internal_mutex);
+}
+
+void writer_lock(rwlock_t *rw) {
+    pthread_mutex_lock(&rw->internal_mutex);
+
+    if (rw->rw_lock_type == N_WAY) { // nway priority
+        while (rw->writer_active == true || rw->total_active_readers > 0 || (rw->total_readers < rw->internal_n && rw->waiting_readers > 0)) {
+            pthread_cond_broadcast(&rw->no_writers);
+            
+            rw->waiting_writers++;
+            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
+            rw->waiting_writers--;
+        }
+        rw->writer_active = true;
+    } else if (rw->rw_lock_type == READERS) { // reader priority
+        while (rw->writer_active == true || rw->total_active_readers > 0 || rw->waiting_readers > 0) {
+            rw->waiting_writers++;
+            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
+            rw->waiting_writers--;
+        }
+
+        rw->writer_active = true;
+    } else { // writer priority
+        while (rw->writer_active == true || rw->total_active_readers > 0) {
+            rw->waiting_writers++;
+            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
+            rw->waiting_writers--;
+        }
+
+        rw->writer_active = true;
+    }
+
+    pthread_mutex_unlock(&rw->internal_mutex);
+}
+
+void writer_unlock(rwlock_t *rw) {
 }
