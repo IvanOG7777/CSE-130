@@ -177,6 +177,7 @@ void writer_lock(rwlock_t *rw) {
     }
 
     if (rw->rw_lock_type == WRITERS) {
+        // wait only if there is and active writer OR active readers
         while (rw->writer_active == true || rw->total_active_readers > 0) {
             rw->waiting_writers++;
             pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
