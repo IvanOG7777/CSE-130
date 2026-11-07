@@ -165,11 +165,25 @@ void writer_lock(rwlock_t *rw) {
     pthread_mutex_lock(&rw->internal_mutex);
 
     if (rw->rw_lock_type == READERS) {
+        // make writer wait if
+        // there is already a writer OR there are current readers OR there are waiting readers
+        while (rw->writer_active == true || rw->total_active_readers > 0 || rw->waiting_readers > 0) {
+            rw->waiting_writers++;
+            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
+            rw->waiting_writers--;
+        }
 
+        rw->writer_active = true;
     }
 
     if (rw->rw_lock_type == WRITERS) {
+        while (rw->writer_active == true || rw->total_active_readers > 0) {
+            rw->waiting_writers++;
+            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
+            rw->waiting_writers--;
+        }
 
+        rw->writer_active = true;
     }
 
     if (rw->rw_lock_type == N_WAY) {
