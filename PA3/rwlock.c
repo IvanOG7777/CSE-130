@@ -134,9 +134,28 @@ void reader_lock(rwlock_t *rw) {
 void reader_unlock(rwlock_t *rw) {
     pthread_mutex_lock(&rw->internal_mutex);
 
-    rw->total_active_readers--;
-    if (rw->total_active_readers == 0) {
-        pthread_cond_signal(&rw->no_readers);
+    if (rw->rw_lock_type == N_WAY) {
+        rw->total_active_readers--;
+        // broadcast to reader threads if
+        // no active writer AND there are waiting reader threads && (batch hasn't been exhausted OR there are no waiting writers
+        if (rw->writer_active == false && rw->waiting_readers > 0 && (rw->total_readers < rw->internal_n || rw->waiting_writers == 0)) {
+            pthread_cond_broadcast(&rw->no_writers);
+        }
+
+        // signal to a writer thread if
+        // active readers is 0 AND there are waiting writers && (reader batch has been exhausted OR there are no waiting readers)
+        if (rw->total_active_readers == 0 && rw->waiting_writers > 0 && (rw->total_readers >= rw->internal_n || rw->waiting_readers == 0)) {
+            pthread_cond_signal(&rw->no_readers);
+        }
+    } else {
+        // case for both READER and WRITERS
+
+        rw->total_active_readers--;
+
+        // when last reader "unlocks"
+        if (rw->total_active_readers == 0) {
+            pthread_cond_signal(&rw->no_readers); // signal a waiting writer if any
+        }
     }
 
     pthread_mutex_unlock(&rw->internal_mutex);
@@ -145,7 +164,17 @@ void reader_unlock(rwlock_t *rw) {
 void writer_lock(rwlock_t *rw) {
     pthread_mutex_lock(&rw->internal_mutex);
 
-    if (rw->rw_lock_type == )
+    if (rw->rw_lock_type == READERS) {
+
+    }
+
+    if (rw->rw_lock_type == WRITERS) {
+
+    }
+
+    if (rw->rw_lock_type == N_WAY) {
+
+    }
 
     pthread_mutex_unlock(&rw->internal_mutex);
 }
