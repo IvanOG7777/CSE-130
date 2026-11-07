@@ -15,7 +15,7 @@ struct rwlock {
     int waiting_writers; // tracks the waiting writers
     bool writer_active;
 
-    int total_readers; // how many readers have been admitted for batch between writers
+    uint32_t total_readers; // how many readers have been admitted for batch between writers
     uint32_t internal_n; // count for batched readers per writer
 
     PRIORITY rw_lock_type;
@@ -23,20 +23,23 @@ struct rwlock {
     pthread_mutex_t internal_mutex;
 
     // notification for other threads
-    pthread_cond_t no_readers;
-    pthread_cond_t no_writers;
+    pthread_cond_t no_readers; // condition writers wait for
+    pthread_cond_t no_writers; // condition readers wait for
 };
 
 rwlock_t *rwlock_new(PRIORITY p, uint32_t n) {
-    rwlock_t *new_rwlock = malloc(sizeof(rwlock_t));
+    rwlock_t *new_rwlock = malloc(sizeof(rwlock_t)); // allocate space for struct
 
     if (new_rwlock == NULL) return NULL;
 
+    // Init struct variables
     new_rwlock->total_active_readers = 0;
     new_rwlock->total_readers = 0;
     new_rwlock->waiting_readers = 0;
     new_rwlock->waiting_writers = 0;
     new_rwlock->writer_active = false;
+
+    // Cases if rwlock is N-WAY
     if (p == N_WAY) {
         new_rwlock->internal_n = n;
     } else {
@@ -44,6 +47,7 @@ rwlock_t *rwlock_new(PRIORITY p, uint32_t n) {
     }
     new_rwlock->rw_lock_type = p;
 
+    // pthread inits
     if (pthread_mutex_init(&new_rwlock->internal_mutex, NULL) != 0) {
         free(new_rwlock);
         new_rwlock = NULL;
@@ -74,6 +78,7 @@ rwlock_t *rwlock_new(PRIORITY p, uint32_t n) {
 }
 
 void rwlock_delete(rwlock_t **rw) {
+    // check if pointer to address and struct aren't null, and free struct/address
     if (rw != NULL && *rw != NULL) {
         pthread_mutex_destroy(&(*rw)->internal_mutex);
         pthread_cond_destroy(&(*rw)->no_readers);
@@ -85,28 +90,41 @@ void rwlock_delete(rwlock_t **rw) {
 }
 
 void reader_lock(rwlock_t *rw) {
+    // lock mutex
     pthread_mutex_lock(&rw->internal_mutex);
 
-    if (rw->rw_lock_type == N_WAY) {
-        // make reader wait if there is a current active writer OR if waiting writers is more than 0 AND allowance for readers has been meet
-        while (rw->writer_active == true || (rw->waiting_writers > 0 && rw->total_readers >= rw->internal_n)) {
+    if (rw->rw_lock_type == READERS) {
+        // wait only if there's a current writer holding the lock
+        while (rw->writer_active == true) {
+            // add to waiting reader list, wait for signal and subtract from list when signaled
             rw->waiting_readers++;
             pthread_cond_wait(&rw->no_writers, &rw->internal_mutex);
-            // temporary release mutex, gets put to sleep and waits to be awoken
             rw->waiting_readers--;
         }
 
         rw->total_active_readers++;
-        rw->total_readers++;
-    } else {
-        // wait if writer is active OR if priority type is WRITERS AND there are waiting writer threads
-        while (rw->writer_active == true || (rw->rw_lock_type == WRITERS && rw->waiting_writers > 0)) {
+    }
+
+    if (rw->rw_lock_type == WRITERS) {
+        // wait if there's a current writer holding the lock OR there are writers that are waiting
+        while (rw->writer_active == true || rw->waiting_writers > 0) {
+            // add to waiting reader list, wait for signal and subtract from list when signaled
             rw->waiting_readers++;
             pthread_cond_wait(&rw->no_writers, &rw->internal_mutex);
-            // temporary release mutex, gets put to sleep and waits to be awoken
             rw->waiting_readers--;
         }
 
+        rw->total_active_readers++;
+    }
+
+    if (rw->rw_lock_type == N_WAY) {
+        // wait if there is an active writer OR if there are waiting writers AND the batch of readers has been exhausted
+        while (rw->writer_active == true || (rw->waiting_writers > 0 && rw->total_readers >= rw->internal_n)) {
+            rw->waiting_readers++;
+            pthread_cond_wait(&rw->no_writers, &rw->internal_mutex);
+            rw->waiting_readers--;
+        }
+        rw->total_readers++;
         rw->total_active_readers++;
     }
 
@@ -115,8 +133,11 @@ void reader_lock(rwlock_t *rw) {
 
 void reader_unlock(rwlock_t *rw) {
     pthread_mutex_lock(&rw->internal_mutex);
-    rw->total_active_readers--;
 
+    rw->total_active_readers--;
+    if (rw->total_active_readers == 0) {
+        pthread_cond_signal(&rw->no_readers);
+    }
 
     pthread_mutex_unlock(&rw->internal_mutex);
 }
@@ -124,35 +145,7 @@ void reader_unlock(rwlock_t *rw) {
 void writer_lock(rwlock_t *rw) {
     pthread_mutex_lock(&rw->internal_mutex);
 
-    if (rw->rw_lock_type == N_WAY) { // nway priority
-        while (rw->writer_active == true || rw->total_active_readers > 0 || (rw->total_readers < rw->internal_n && rw->waiting_readers > 0)) {
-
-            if (rw->writer_active == false && rw->total_readers < rw->internal_n && rw->waiting_readers > 0) {
-                pthread_cond_broadcast(&rw->no_writers);
-            }
-
-            rw->waiting_writers++;
-            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
-            rw->waiting_writers--;
-        }
-        rw->writer_active = true;
-    } else if (rw->rw_lock_type == READERS) { // reader priority
-        while (rw->writer_active == true || rw->total_active_readers > 0 || rw->waiting_readers > 0) { // wait if there is active writer OR if active_readers OR if there are waiting_readers
-            rw->waiting_writers++;
-            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
-            rw->waiting_writers--;
-        }
-
-        rw->writer_active = true;
-    } else { // writer priority
-        while (rw->writer_active == true || rw->total_active_readers > 0) { // wait if there is active writer OR if there are active readers
-            rw->waiting_writers++;
-            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
-            rw->waiting_writers--;
-        }
-
-        rw->writer_active = true;
-    }
+    if (rw->rw_lock_type == )
 
     pthread_mutex_unlock(&rw->internal_mutex);
 }
