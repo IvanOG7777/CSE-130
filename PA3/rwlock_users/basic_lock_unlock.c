@@ -1,7 +1,7 @@
-#include "rwlock.h"
-
 #include <unistd.h>
 #include <stdio.h>
+
+#include "../rwlock.h"
 
 int main(int argc, char **argv) {
   (void)argc;

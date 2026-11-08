@@ -98,7 +98,7 @@ void reader_lock(rwlock_t *rw) {
         while (rw->writer_active == true) {
             // add to waiting reader list, wait for signal and subtract from list when signaled
             rw->waiting_readers++;
-            pthread_cond_wait(&rw->no_writers, &rw->internal_mutex);
+            pthread_cond_wait(&rw->no_writers, &rw->internal_mutex); // release mutex and wait
             rw->waiting_readers--;
         }
 
@@ -110,7 +110,7 @@ void reader_lock(rwlock_t *rw) {
         while (rw->writer_active == true || rw->waiting_writers > 0) {
             // add to waiting reader list, wait for signal and subtract from list when signaled
             rw->waiting_readers++;
-            pthread_cond_wait(&rw->no_writers, &rw->internal_mutex);
+            pthread_cond_wait(&rw->no_writers, &rw->internal_mutex); // release mutex and wait
             rw->waiting_readers--;
         }
 
@@ -121,7 +121,7 @@ void reader_lock(rwlock_t *rw) {
         // wait if there is an active writer OR if there are waiting writers AND the batch of readers has been exhausted
         while (rw->writer_active == true || (rw->waiting_writers > 0 && rw->total_readers >= rw->internal_n)) {
             rw->waiting_readers++;
-            pthread_cond_wait(&rw->no_writers, &rw->internal_mutex);
+            pthread_cond_wait(&rw->no_writers, &rw->internal_mutex); // release mutex and wait
             rw->waiting_readers--;
         }
         rw->total_readers++;
@@ -169,7 +169,7 @@ void writer_lock(rwlock_t *rw) {
         // there is already a writer OR there are current readers OR there are waiting readers
         while (rw->writer_active == true || rw->total_active_readers > 0 || rw->waiting_readers > 0) {
             rw->waiting_writers++;
-            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
+            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex); // release mutex and wait
             rw->waiting_writers--;
         }
 
@@ -177,10 +177,10 @@ void writer_lock(rwlock_t *rw) {
     }
 
     if (rw->rw_lock_type == WRITERS) {
-        // wait only if there is and active writer OR active readers
+        // wait only if there is an active writer OR active readers
         while (rw->writer_active == true || rw->total_active_readers > 0) {
             rw->waiting_writers++;
-            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex);
+            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex); // release mutex and wait
             rw->waiting_writers--;
         }
 
@@ -189,6 +189,21 @@ void writer_lock(rwlock_t *rw) {
 
     if (rw->rw_lock_type == N_WAY) {
 
+        // make writer wait if
+        // there is an active writer OR there are active readers OR batch hasn't been exhausted AND there are waiting readers
+        while (rw->writer_active == true || rw->total_active_readers > 0 || (rw->total_readers < rw->internal_n && rw->waiting_readers > 0)) {
+            rw->waiting_writers++;
+
+            // broadcast to waiting readers if
+            // there are no active writers AND batch hasn't been exhausted AND there are waiting threads
+            if (rw->writer_active == false && rw->total_readers < rw->internal_n && rw->waiting_readers > 0) {
+                pthread_cond_broadcast(&rw->no_writers);
+            }
+            pthread_cond_wait(&rw->no_readers, &rw->internal_mutex); // release mutex and wait
+            rw->waiting_writers--;
+        }
+
+        rw->writer_active = true;
     }
 
     pthread_mutex_unlock(&rw->internal_mutex);
@@ -197,7 +212,36 @@ void writer_lock(rwlock_t *rw) {
 void writer_unlock(rwlock_t *rw) {
     pthread_mutex_lock(&rw->internal_mutex);
 
+    if (rw->rw_lock_type == READERS) {
+        rw->writer_active = false;
+        if (rw->waiting_readers > 0) {
+            pthread_cond_broadcast(&rw->no_writers);
+        } else if (rw->waiting_writers > 0){
+            pthread_cond_signal(&rw->no_readers);
+        }
+    }
 
+    if  (rw->rw_lock_type == WRITERS) {
+        rw->writer_active = false;
+        if (rw->waiting_writers > 0) {
+            pthread_cond_signal(&rw->no_readers);
+        } else if (rw->waiting_readers > 0) {
+            pthread_cond_broadcast(&rw->no_writers);
+        }
+    }
+
+    if (rw->rw_lock_type == N_WAY) {
+        // set active writer to false and reset batch
+        rw->writer_active = false;
+        rw->total_readers = 0;
+
+        // if there are waiting reader threads broadcast to them
+        if (rw->waiting_readers > 0) {
+            pthread_cond_broadcast(&rw->no_writers);
+        } else if (rw->waiting_writers > 0){
+            pthread_cond_signal(&rw->no_readers);
+        }
+    }
 
     pthread_mutex_unlock(&rw->internal_mutex);
 }
