@@ -1,5 +1,5 @@
-// Asgn 4: A simple HTTP server.
-// By:  Andi Quinn
+#include <assert.h>
+#include <ctype.h>
 
 #include "library/connection.h"
 #include "library/listener_socket.h"
@@ -24,11 +24,14 @@
 void handle_connection(int);
 
 void handle_get(conn_t *);
+
 void handle_put(conn_t *);
+
 void handle_unsupported(conn_t *);
 
-int main(int argc, char **argv) {
+void *worker_thread(void *arg);
 
+int main(int argc, char **argv) {
     // Gunna need to change this to valid erorr responses
     if (argc < 2) {
         warnx("wrong arguments: %s port_num", argv[0]);
@@ -36,10 +39,36 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    Queue
+    int threads = 4;
+    int opt;
+
+    // accept a -t value and make sure -t has a value (t:)
+    while ((opt = getopt(argc, argv, "t:")) != -1) {
+        if (opt == 't') {
+                char *endptr = NULL;
+                errno = 0;
+                long val = strtol(optarg, &endptr, 10); // cast value starting from index after optarg to a long
+
+                // if any of these errors appears return error
+                if (errno != 0 || endptr == optarg || *endptr != '\0' || val < 1) {
+                    warnx("invalid thread count: %s", optarg);
+                    return EXIT_FAILURE;
+                }
+                threads = (int) val;
+                break;
+            } else {
+                fprintf(stderr, "Usage: %s [-t threads] <port>\n", argv[0]);
+                return EXIT_FAILURE;
+        }
+    }
+
+    if (optind != argc - 1) {
+        fprintf(stderr, "Usage: %s [-t threads] <port>\n", argv[0]);
+        return EXIT_FAILURE;
+    }
 
     char *endptr = NULL;
-    size_t port = (size_t) strtoull(argv[1], &endptr, 10);
+    size_t port = (size_t) strtoull(argv[optind], &endptr, 10);
 
     if (endptr && *endptr != '\0') {
         warnx("invalid port number: %s", argv[1]);
@@ -54,6 +83,17 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    // create new array of worker threads
+    pthread_t *thread_workers = malloc(threads * sizeof(pthread_t));
+    assert(thread_workers != NULL);
+
+    queue_t *shared_queue = queue_new(threads * 2);
+
+    // loop through threads and create each thread
+    for (int i = 0; i < threads; i++) {
+        pthread_create(thread_workers[i], NULL, worker_thread, shared_queue);
+    }
+
     // single thread does all work currently
     while (1) {
         int connfd = ls_accept(sock);
@@ -62,11 +102,12 @@ int main(int argc, char **argv) {
     }
     ls_delete(&sock);
 
+
+    free(thread_workers);
     return EXIT_SUCCESS;
 }
 
 void handle_connection(int connfd) {
-
     conn_t *conn = conn_new(connfd);
 
     const Response_t *res = conn_parse(conn);
@@ -86,7 +127,6 @@ void handle_connection(int connfd) {
 }
 
 void handle_put(conn_t *conn) {
-
     char *uri = conn_get_uri(conn);
 
     const Response_t *res = NULL;

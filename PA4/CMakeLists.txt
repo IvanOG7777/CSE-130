@@ -4,7 +4,7 @@ project(MultiThreadHTTP)
 
 set(CMAKE_C_STANDARD 17)
 
-add_executable(
+add_executable(MultiThreadHTTP
         library/connection.h
         library/iowrapper.h
         library/listener_socket.h
