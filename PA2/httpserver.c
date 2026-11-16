@@ -557,9 +557,7 @@ int handle_get(const Request *request, int connfd) {
   char response[256];
   const char *ok = "OK";
   const int code = 200;
-  int length = snprintf(response, sizeof(response),
-                        "HTTP/1.1 %d %s\r\nContent-Length: %zu\r\n\r\n", code,
-                        ok, file_size);
+  int length = snprintf(response, sizeof(response),"HTTP/1.1 %d %s\r\nContent-Length: %zu\r\n\r\n", code, ok, file_size);
 
   if (length < 0 || (size_t)length >= sizeof(response)) {
     send_response(connfd, 500);

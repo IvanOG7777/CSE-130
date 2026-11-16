@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
                 return EXIT_FAILURE;
             }
 
-            if (errno != ERANGE) {
+            if (val <= INT_MAX) {
                 threads = (int) val;
             } else {
                 fprintf(stderr, "Too big of a number\n");
@@ -101,10 +101,12 @@ int main(int argc, char **argv) {
 
     queue_t *shared_queue = queue_new(threads * 2);
 
-    for (int i = 0; i < threads * 2; i++) {
-        int *conn_address = (int *)malloc(sizeof(int));
-        *conn_address = i;
-        queue_push(shared_queue, conn_address);
+    // if queue allocation fails clean up
+    if (shared_queue == NULL) {
+        fprintf(stderr, "Failed to created a shared_queue\n");
+        free(thread_workers);
+        ls_delete(&sock);
+        return EXIT_FAILURE;
     }
 
     // loop through threads and create each thread
@@ -205,7 +207,6 @@ out:
 
 // pass a void pointer of queue struct to function for threads to read
 void *worker_thread(void *arg) {
-    printf("Entered worker_thread() function\n");
     queue_t *shared_queue = (queue_t *) arg; // cast pointer to a queue type
     if (shared_queue == NULL) {
         return NULL;
@@ -216,9 +217,12 @@ void *worker_thread(void *arg) {
     // keep popping from queue
     while (1) {
         // items receives the address of dispatcher pushed connfd
-        queue_pop(shared_queue, &item);
+        if (!queue_pop(shared_queue, &item)) {
+            break;
+        }
         int connfd = *(int *)item;
-        printf("connid is: %d\n", connfd);
+
+        free (item); // free item address from main
 
         handle_connection(connfd);
         close(connfd);
