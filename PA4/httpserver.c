@@ -1,10 +1,10 @@
 // Asgn 4: A simple HTTP server.
 // By:  Andi Quinn
 
-#include "connection.h"
-#include "listener_socket.h"
-#include "request.h"
-#include "response.h"
+#include "library/connection.h"
+#include "library/listener_socket.h"
+#include "library/request.h"
+#include "library/response.h"
 
 #include <err.h>
 #include <errno.h>
@@ -17,6 +17,10 @@
 
 #include <sys/stat.h>
 
+#include <pthread.h>
+#include "library/queue.h"
+#include "library/rwlock.h"
+
 void handle_connection(int);
 
 void handle_get(conn_t *);
@@ -24,14 +28,19 @@ void handle_put(conn_t *);
 void handle_unsupported(conn_t *);
 
 int main(int argc, char **argv) {
+
+    // Gunna need to change this to valid erorr responses
     if (argc < 2) {
         warnx("wrong arguments: %s port_num", argv[0]);
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
         return EXIT_FAILURE;
     }
 
+    Queue
+
     char *endptr = NULL;
     size_t port = (size_t) strtoull(argv[1], &endptr, 10);
+
     if (endptr && *endptr != '\0') {
         warnx("invalid port number: %s", argv[1]);
         return EXIT_FAILURE;
@@ -39,11 +48,13 @@ int main(int argc, char **argv) {
 
     signal(SIGPIPE, SIG_IGN);
     Listener_Socket_t *sock = ls_new(port);
+
     if (!sock) {
         warnx("cannot open socket");
         return EXIT_FAILURE;
     }
 
+    // single thread does all work currently
     while (1) {
         int connfd = ls_accept(sock);
         handle_connection(connfd);
