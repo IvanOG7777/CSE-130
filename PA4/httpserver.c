@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 
 #include <sys/stat.h>
 
@@ -45,20 +46,25 @@ int main(int argc, char **argv) {
     // accept a -t value and make sure -t has a value (t:)
     while ((opt = getopt(argc, argv, "t:")) != -1) {
         if (opt == 't') {
-                char *endptr = NULL;
-                errno = 0;
-                long val = strtol(optarg, &endptr, 10); // cast value starting from index after optarg to a long
+            char *endptr = NULL;
+            errno = 0;
+            long val = strtol(optarg, &endptr, 10); // cast value starting from index after optarg to a long
 
-                // if any of these errors appears return error
-                if (errno != 0 || endptr == optarg || *endptr != '\0' || val < 1) {
-                    warnx("invalid thread count: %s", optarg);
-                    return EXIT_FAILURE;
-                }
-                threads = (int) val;
-                break;
-            } else {
-                fprintf(stderr, "Usage: %s [-t threads] <port>\n", argv[0]);
+            // if any of these errors appears return error
+            if (errno != 0 || endptr == optarg || *endptr != '\0' || val < 1) {
+                warnx("invalid thread count: %s", optarg);
                 return EXIT_FAILURE;
+            }
+
+            if (errno != ERANGE) {
+                threads = (int) val;
+            } else {
+                fprintf(stderr, "Too big of a number\n");
+                return EXIT_FAILURE;
+            }
+        } else {
+            fprintf(stderr, "Usage: %s [-t threads] <port>\n", argv[0]);
+            return EXIT_FAILURE;
         }
     }
 
@@ -72,6 +78,12 @@ int main(int argc, char **argv) {
 
     if (endptr && *endptr != '\0') {
         warnx("invalid port number: %s", argv[1]);
+        return EXIT_FAILURE;
+    }
+
+    // make sure port is between 1 and 65535
+    if (port < 1 || port > 65535) {
+        write(STDERR_FILENO, "Invalid Port\n", 13);
         return EXIT_FAILURE;
     }
 
@@ -89,16 +101,40 @@ int main(int argc, char **argv) {
 
     queue_t *shared_queue = queue_new(threads * 2);
 
+    for (int i = 0; i < threads * 2; i++) {
+        int *conn_address = (int *)malloc(sizeof(int));
+        *conn_address = i;
+        queue_push(shared_queue, conn_address);
+    }
+
     // loop through threads and create each thread
     for (int i = 0; i < threads; i++) {
-        pthread_create(thread_workers[i], NULL, worker_thread, shared_queue);
+        int return_value = pthread_create(&thread_workers[i], NULL, worker_thread, shared_queue);
+        if (return_value != 0) {
+            fprintf(stderr, "Couldn't create thread\n");
+        }
     }
 
     // single thread does all work currently
     while (1) {
         int connfd = ls_accept(sock);
-        handle_connection(connfd);
-        close(connfd);
+        if (connfd < 0) {
+            continue;
+        }
+
+        int *conn_address = (int *)malloc(sizeof(int));
+        if (conn_address == NULL) {
+            close(connfd);
+            continue;
+        }
+
+        *conn_address = connfd;
+
+        // push address of the current connfd to shared_queue
+        if (!queue_push(shared_queue, conn_address)) {
+            close(connfd);
+            free(conn_address);
+        }
     }
     ls_delete(&sock);
 
@@ -165,4 +201,28 @@ void handle_put(conn_t *conn) {
 
 out:
     conn_send_response(conn, res);
+}
+
+// pass a void pointer of queue struct to function for threads to read
+void *worker_thread(void *arg) {
+    printf("Entered worker_thread() function\n");
+    queue_t *shared_queue = (queue_t *) arg; // cast pointer to a queue type
+    if (shared_queue == NULL) {
+        return NULL;
+    }
+
+    void *item = NULL; // address of item to be popped, initially set to NULL
+
+    // keep popping from queue
+    while (1) {
+        // items receives the address of dispatcher pushed connfd
+        queue_pop(shared_queue, &item);
+        int connfd = *(int *)item;
+        printf("connid is: %d\n", connfd);
+
+        handle_connection(connfd);
+        close(connfd);
+    }
+
+    return NULL;
 }
