@@ -158,10 +158,64 @@ void handle_connection(int connfd) {
         if (req == &REQUEST_PUT) {
             handle_put(conn);
         }
+
+        if (req == &REQUEST_GET) {
+            handle_get(conn);
+        }
         // add cases for other types of requests here
     }
 
     conn_delete(&conn);
+}
+
+void handle_get(conn_t *conn) {
+    struct stat sb;
+    char *uri = conn_get_uri(conn);
+
+    const Response_t *res = NULL;
+
+    int open_res = open(uri, O_RDONLY);
+
+    if (open_res < 0) {
+        if (errno == ENOENT) {
+            res = &RESPONSE_NOT_FOUND;
+        } else if (errno == EACCES) {
+            res = &RESPONSE_FORBIDDEN;
+        } else {
+            res = &RESPONSE_INTERNAL_SERVER_ERROR;
+        }
+
+        conn_send_response(conn, res);
+        return;
+    }
+
+    // check if stat was successful
+    if (fstat(open_res, &sb) < 0) {
+        res = &RESPONSE_INTERNAL_SERVER_ERROR;
+        close(open_res);
+        conn_send_response(conn, res);
+        return;
+    }
+
+    if (!S_ISREG(sb.st_mode)) {
+        res = &RESPONSE_FORBIDDEN;
+        close(open_res);
+        conn_send_response(conn, res);
+        return;
+    }
+
+    if (sb.st_size < 0) {
+        res = &RESPONSE_INTERNAL_SERVER_ERROR;
+        close(open_res);
+        conn_send_response(conn, res);
+        return;
+    }
+
+    size_t file_size = (size_t)sb.st_size;
+
+    res = conn_send_file(conn, open_res, file_size);
+
+    close(open_res);
 }
 
 void handle_put(conn_t *conn) {
@@ -175,14 +229,15 @@ void handle_put(conn_t *conn) {
     // Open the file
     int fd = open(uri, O_CREAT | O_WRONLY | O_TRUNC, 0600);
 
+    // error check on fd
     if (fd < 0) {
         // printf("%s: %d", uri, errno);
         if (errno == EACCES || errno == EISDIR || errno == ENOENT) {
             res = &RESPONSE_FORBIDDEN;
-            goto out;
+            goto out; // jump to out
         } else {
             res = &RESPONSE_INTERNAL_SERVER_ERROR;
-            goto out;
+            goto out; // jump to out
         }
     }
 
@@ -190,7 +245,7 @@ void handle_put(conn_t *conn) {
     // receive the file
     res = conn_recv_file(conn, fd); // conn --> fd, NULL return is good
 
-    // check to see if it was OK.
+    // check to see if it was OK or Created.
     if (res == NULL) {
         if (existed) {
             res = &RESPONSE_OK;
