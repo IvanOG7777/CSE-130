@@ -32,6 +32,45 @@ void handle_unsupported(conn_t *);
 
 void *worker_thread(void *arg);
 
+rwlock_t *get_uri_lock(const char *uri);
+
+typedef struct uri_lock {
+    char *uri; // pointer to passed uri
+    rwlock_t *lock; // current rwlock
+    struct uri_lock *next; // pointer to the next uri struct
+} uri_lock_t;
+
+// function that allocates a new pointer to a uri_lock struct
+uri_lock_t *new_uri_lock(const char *uri, rwlock_t *lock) {
+    uri_lock_t *new_lock = malloc(sizeof(uri_lock_t)); // allocate space for struct
+
+    // if bad allocation return NULL
+    if (new_lock == NULL) {
+        return NULL;
+    }
+
+    // allocate memory for uri string
+    new_lock->uri = malloc(strlen(uri) + 1); // allocate space for char* string
+
+    // if bad  allocation free struct then return NULL
+    if (new_lock->uri == NULL) {
+        free(new_lock);
+        return NULL;
+    }
+
+    // copy uri
+    strcpy(new_lock->uri, uri); // copy string over to struct
+
+    // set values and return new_lock
+    new_lock->lock = lock;
+    new_lock->next = NULL;
+
+    return new_lock;
+}
+
+static uri_lock_t *lock_head = NULL; // pointer to head of linked list
+static pthread_mutex_t lock_mutex =  PTHREAD_MUTEX_INITIALIZER; // used to protect the linked list when threads are searching
+
 int main(int argc, char **argv) {
     // Gunna need to change this to valid erorr responses
     if (argc < 2) {
@@ -153,16 +192,36 @@ void handle_connection(int connfd) {
     if (res != NULL) {
         conn_send_response(conn, res);
     } else {
-        printf("%s", conn_str(conn));
         const Request_t *req = conn_get_request(conn);
         if (req == &REQUEST_PUT) {
-            handle_put(conn);
-        }
+            rwlock_t *file_lock = get_uri_lock(conn_get_uri(conn)); // get file specific lock
 
-        if (req == &REQUEST_GET) {
+            if (file_lock == NULL) {
+                conn_send_response(conn, &RESPONSE_INTERNAL_SERVER_ERROR); // send error
+                conn_delete(&conn); // delete conn
+                return;
+            }
+
+            // If valid lock, use reader lock/unlock
+            writer_lock(file_lock);
+            handle_put(conn);
+            writer_lock(file_lock);
+        } else if (req == &REQUEST_GET) {
+            rwlock_t *file_lock = get_uri_lock(conn_get_uri(conn)); // get file specific lock
+
+            if (file_lock == NULL) {
+                conn_send_response(conn, &RESPONSE_INTERNAL_SERVER_ERROR); // send error
+                conn_delete(&conn); // delete conn
+                return;
+            }
+
+            // If valid lock use writer lock/unlock
+            reader_lock(file_lock);
             handle_get(conn);
+            reader_lock(file_lock);
+        } else {
+            handle_unsupported(conn);
         }
-        // add cases for other types of requests here
     }
 
     conn_delete(&conn);
@@ -260,6 +319,14 @@ out:
     conn_send_response(conn, res);
 }
 
+void handle_unsupported(conn_t *conn) {
+    const Response_t *res = NULL;
+
+    res = &RESPONSE_NOT_IMPLEMENTED;
+
+    conn_send_response(conn, res);
+}
+
 // pass a void pointer of queue struct to function for threads to read
 void *worker_thread(void *arg) {
     queue_t *shared_queue = (queue_t *) arg; // cast pointer to a queue type
@@ -284,4 +351,49 @@ void *worker_thread(void *arg) {
     }
 
     return NULL;
+}
+
+rwlock_t *get_uri_lock(const char *uri) {
+    pthread_mutex_lock(&lock_mutex);
+
+    uri_lock_t *current = lock_head;
+
+    // loop through the linked list
+    while (current != NULL) {
+        // if a uri_struct has the passed uri
+        if (strcmp(current->uri, uri) == 0) {
+            // gets its lock and unlock global mutex
+            rwlock_t *lock_found = current->lock;
+            pthread_mutex_unlock(&lock_mutex);
+            return lock_found; // return the lock
+        }
+        current = current->next; // keep traversing
+    }
+
+    // if no uri is found above
+    rwlock_t *new_rwlock = rwlock_new(WRITERS, 0); // create new lock
+
+    // NULL check
+    if (new_rwlock == NULL) {
+        pthread_mutex_unlock(&lock_mutex);
+        return NULL;
+    }
+
+    // create a new
+    uri_lock_t *new_lock_node= new_uri_lock(uri, new_rwlock);
+
+    // NULL check
+    if (new_lock_node == NULL) {
+        rwlock_delete(&new_rwlock);
+        pthread_mutex_unlock(&lock_mutex);
+        return NULL;
+    }
+
+    // put new nodes next to head
+    new_lock_node->next = lock_head;
+    lock_head = new_lock_node; // make new node the lists head
+
+    pthread_mutex_unlock(&lock_mutex);
+
+    return new_rwlock;
 }
