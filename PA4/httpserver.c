@@ -22,6 +22,17 @@
 #include "library/queue.h"
 #include "library/rwlock.h"
 
+typedef struct uri_lock {
+    char *uri; // pointer to passed uri
+    rwlock_t *lock; // current rwlock
+    struct uri_lock *next; // pointer to the next uri struct
+} uri_lock_t;
+
+
+static uri_lock_t *lock_head = NULL; // pointer to head of linked list
+static pthread_mutex_t lock_mutex =  PTHREAD_MUTEX_INITIALIZER; // used to protect the linked list when threads are searching
+static pthread_mutex_t audit_mutex =  PTHREAD_MUTEX_INITIALIZER; // used to protect the linked list when threads are searching
+
 void handle_connection(int);
 
 int handle_get(conn_t *);
@@ -35,12 +46,6 @@ void *worker_thread(void *arg);
 rwlock_t *get_uri_lock(const char *uri);
 
 void audit_log(conn_t *conn, const char *method, int status);
-
-typedef struct uri_lock {
-    char *uri; // pointer to passed uri
-    rwlock_t *lock; // current rwlock
-    struct uri_lock *next; // pointer to the next uri struct
-} uri_lock_t;
 
 // function that allocates a new pointer to a uri_lock struct
 uri_lock_t *new_uri_lock(const char *uri, rwlock_t *lock) {
@@ -70,11 +75,8 @@ uri_lock_t *new_uri_lock(const char *uri, rwlock_t *lock) {
     return new_lock;
 }
 
-static uri_lock_t *lock_head = NULL; // pointer to head of linked list
-static pthread_mutex_t lock_mutex =  PTHREAD_MUTEX_INITIALIZER; // used to protect the linked list when threads are searching
-
 int main(int argc, char **argv) {
-    // Gunna need to change this to valid erorr responses
+    // Gunna need to change this to valid error responses
     if (argc < 2) {
         warnx("wrong arguments: %s port_num", argv[0]);
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
@@ -206,7 +208,8 @@ void handle_connection(int connfd) {
 
             // If valid lock, use reader lock/unlock
             writer_lock(file_lock);
-            handle_put(conn);
+            int status = handle_put(conn);
+            audit_log(conn, "PUT", status);
             writer_unlock(file_lock);
         } else if (req == &REQUEST_GET) {
             rwlock_t *file_lock = get_uri_lock(conn_get_uri(conn)); // get file specific lock
@@ -219,7 +222,8 @@ void handle_connection(int connfd) {
 
             // If valid lock use writer lock/unlock
             reader_lock(file_lock);
-            handle_get(conn);
+            int status = handle_get(conn);
+            audit_log(conn, "GET", status);
             reader_unlock(file_lock);
         } else {
             handle_unsupported(conn);
@@ -247,7 +251,8 @@ int handle_get(conn_t *conn) {
         }
 
         conn_send_response(conn, res);
-        return;
+        int res_to_int = response_get_code(res);
+        return res_to_int;
     }
 
     // check if stat was successful
@@ -255,21 +260,24 @@ int handle_get(conn_t *conn) {
         res = &RESPONSE_INTERNAL_SERVER_ERROR;
         close(open_res);
         conn_send_response(conn, res);
-        return;
+        int res_to_int = response_get_code(res);
+        return res_to_int;
     }
 
     if (!S_ISREG(sb.st_mode)) {
         res = &RESPONSE_FORBIDDEN;
         close(open_res);
         conn_send_response(conn, res);
-        return;
+        int res_to_int = response_get_code(res);
+        return res_to_int;
     }
 
     if (sb.st_size < 0) {
         res = &RESPONSE_INTERNAL_SERVER_ERROR;
         close(open_res);
         conn_send_response(conn, res);
-        return;
+        int res_to_int = response_get_code(res);
+        return res_to_int;
     }
 
     size_t file_size = (size_t)sb.st_size;
@@ -277,6 +285,12 @@ int handle_get(conn_t *conn) {
     res = conn_send_file(conn, open_res, file_size);
 
     close(open_res);
+
+    if (res == NULL) {
+        return 200;
+    }
+
+    return response_get_code(res);
 }
 
 int handle_put(conn_t *conn) {
@@ -404,5 +418,18 @@ rwlock_t *get_uri_lock(const char *uri) {
 }
 
 void audit_log(conn_t *conn, const char *method, int status) {
-    
+
+    const char *uri = conn_get_uri(conn);
+    const char *request_id = conn_get_header(conn, "Request-Id");
+    if (request_id == NULL) {
+        request_id = "0";
+    }
+
+    pthread_mutex_lock(&audit_mutex);
+    if (uri[0] == '/') {
+        fprintf(stderr, "%s,%s,%d,%s\n", method, uri, status, request_id);
+    } else {
+        fprintf(stderr, "%s,/%s,%d,%s\n", method, uri, status, request_id);
+    }
+    pthread_mutex_unlock(&audit_mutex);
 }
