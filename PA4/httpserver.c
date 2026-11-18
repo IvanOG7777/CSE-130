@@ -5,6 +5,7 @@
 #include "library/listener_socket.h"
 #include "library/request.h"
 #include "library/response.h"
+#include "library/iowrapper.h"
 
 #include <err.h>
 #include <errno.h>
@@ -37,7 +38,7 @@ void handle_connection(int);
 
 int handle_get(conn_t *);
 
-int handle_put(conn_t *);
+int handle_put(conn_t *, rwlock_t *);
 
 void handle_unsupported(conn_t *);
 
@@ -206,11 +207,7 @@ void handle_connection(int connfd) {
                 return;
             }
 
-            // If valid lock, use reader lock/unlock
-            writer_lock(file_lock);
-            int status = handle_put(conn);
-            audit_log(conn, "PUT", status);
-            writer_unlock(file_lock);
+            handle_put(conn, file_lock);
         } else if (req == &REQUEST_GET) {
             rwlock_t *file_lock = get_uri_lock(conn_get_uri(conn)); // get file specific lock
 
@@ -293,49 +290,87 @@ int handle_get(conn_t *conn) {
     return response_get_code(res);
 }
 
-int handle_put(conn_t *conn) {
+int handle_put(conn_t *conn, rwlock_t *file_lock) {
     char *uri = conn_get_uri(conn);
 
     const Response_t *res = NULL;
 
-    // Check if file already exists before opening it.
-    bool existed = access(uri, F_OK) == 0;
+    FILE *temp = tmpfile();
+    int temp_fd = -1;
+    struct stat sb;
 
-    // Open the file
-    int fd = open(uri, O_CREAT | O_WRONLY | O_TRUNC, 0600);
-
-    // error check on fd
-    if (fd < 0) {
-        // printf("%s: %d", uri, errno);
-        if (errno == EACCES || errno == EISDIR || errno == ENOENT) {
-            res = &RESPONSE_FORBIDDEN;
-            goto out; // jump to out
-        } else {
-            res = &RESPONSE_INTERNAL_SERVER_ERROR;
-            goto out; // jump to out
-        }
+    if (temp == NULL) {
+        res = &RESPONSE_INTERNAL_SERVER_ERROR;
+        goto respond;
     }
 
-    /* fd is valid */
-    // receive the file
-    res = conn_recv_file(conn, fd); // conn --> fd, NULL return is good
+    temp_fd = fileno(temp);
 
-    // check to see if it was OK or Created.
+    if (temp_fd < 0) {
+        res = &RESPONSE_INTERNAL_SERVER_ERROR;
+        goto respond;
+    }
+
+    res = conn_recv_file(conn, temp_fd);
+
+    if (res != NULL) {
+        goto respond;
+    }
+
+    // get temp file size
+    if (fstat(temp_fd, &sb) < 0 || sb.st_size < 0) {
+        res = &RESPONSE_INTERNAL_SERVER_ERROR;
+        goto respond;
+    }
+
+    if (lseek(temp_fd, 0, SEEK_SET) < 0) {
+        res = &RESPONSE_INTERNAL_SERVER_ERROR;
+        goto respond;
+    }
+
+respond:
+
+    writer_lock(file_lock);
+
     if (res == NULL) {
-        if (existed) {
-            res = &RESPONSE_OK;
+        bool existed = access(uri, F_OK) == 0;
+
+        int fd = open(uri, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+
+        if (fd < 0) {
+            if (errno == EACCES || errno == EISDIR || errno == ENOENT) {
+                res = &RESPONSE_FORBIDDEN;
+            } else {
+                res = &RESPONSE_INTERNAL_SERVER_ERROR;
+            }
         } else {
-            res = &RESPONSE_CREATED;
+            ssize_t copied = pass_n_bytes(temp_fd, fd, (size_t) sb.st_size);
+
+            if (copied < 0 || (size_t) copied != (size_t) sb.st_size) {
+                res = &RESPONSE_INTERNAL_SERVER_ERROR;
+            } else if (existed) {
+                res = &RESPONSE_OK;
+            } else {
+                res = &RESPONSE_CREATED;
+            }
+
+            close(fd);
         }
     }
 
-    close(fd);
+    int status = response_get_code(res);
 
-out:
     conn_send_response(conn, res);
-    int res_to_int = response_get_code(res);
 
-    return res_to_int;
+    audit_log(conn, "PUT", status);
+
+    writer_unlock(file_lock);
+
+    if (temp != NULL) {
+        fclose(temp);
+    }
+
+    return status;
 }
 
 void handle_unsupported(conn_t *conn) {
