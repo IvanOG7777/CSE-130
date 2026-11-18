@@ -24,15 +24,17 @@
 
 void handle_connection(int);
 
-void handle_get(conn_t *);
+int handle_get(conn_t *);
 
-void handle_put(conn_t *);
+int handle_put(conn_t *);
 
 void handle_unsupported(conn_t *);
 
 void *worker_thread(void *arg);
 
 rwlock_t *get_uri_lock(const char *uri);
+
+void audit_log(conn_t *conn, const char *method, int status);
 
 typedef struct uri_lock {
     char *uri; // pointer to passed uri
@@ -205,7 +207,7 @@ void handle_connection(int connfd) {
             // If valid lock, use reader lock/unlock
             writer_lock(file_lock);
             handle_put(conn);
-            writer_lock(file_lock);
+            writer_unlock(file_lock);
         } else if (req == &REQUEST_GET) {
             rwlock_t *file_lock = get_uri_lock(conn_get_uri(conn)); // get file specific lock
 
@@ -218,7 +220,7 @@ void handle_connection(int connfd) {
             // If valid lock use writer lock/unlock
             reader_lock(file_lock);
             handle_get(conn);
-            reader_lock(file_lock);
+            reader_unlock(file_lock);
         } else {
             handle_unsupported(conn);
         }
@@ -227,7 +229,7 @@ void handle_connection(int connfd) {
     conn_delete(&conn);
 }
 
-void handle_get(conn_t *conn) {
+int handle_get(conn_t *conn) {
     struct stat sb;
     char *uri = conn_get_uri(conn);
 
@@ -277,7 +279,7 @@ void handle_get(conn_t *conn) {
     close(open_res);
 }
 
-void handle_put(conn_t *conn) {
+int handle_put(conn_t *conn) {
     char *uri = conn_get_uri(conn);
 
     const Response_t *res = NULL;
@@ -317,6 +319,9 @@ void handle_put(conn_t *conn) {
 
 out:
     conn_send_response(conn, res);
+    int res_to_int = response_get_code(res);
+
+    return res_to_int;
 }
 
 void handle_unsupported(conn_t *conn) {
@@ -396,4 +401,8 @@ rwlock_t *get_uri_lock(const char *uri) {
     pthread_mutex_unlock(&lock_mutex);
 
     return new_rwlock;
+}
+
+void audit_log(conn_t *conn, const char *method, int status) {
+    
 }
